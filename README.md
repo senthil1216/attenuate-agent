@@ -8,6 +8,22 @@ A secure coding-agent runtime that makes prompt-injection-induced privilege esca
 
 ---
 
+## Current repository state
+
+The implementation has started as a Rust workspace. The first committed slice is intentionally narrow: the trusted manifest model, the initial capability boundary, append-only attenuation APIs, PEP/PDP/audit/tool crate stubs, and property tests for the first attenuation invariant.
+
+Local checks:
+
+```sh
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+See `docs/DEVELOPMENT.md` for setup notes.
+
+---
+
 ## One-sentence hook
 
 A coding agent where prompt injection physically cannot escalate privilege — because authority only flows down and only narrows. Capability-based authorization applied to the place agents are most exposed.

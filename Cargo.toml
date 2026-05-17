@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "agent",
+    "audit",
+    "capability",
+    "demo",
+    "manifest",
+    "pdp",
+    "pep",
+    "sandbox",
+    "tools",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/senthil1216/attenuate-agent"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1"
+biscuit-auth = "5"
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+proptest = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
