@@ -1,3 +1,4 @@
+use biscuit_auth::KeyPair;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -7,6 +8,9 @@ use uuid::Uuid;
 use warden_manifest::{ManifestError, TaskManifest};
 
 pub use warden_manifest::NetworkPolicy;
+
+#[allow(dead_code)]
+mod biscuit_codec;
 
 /// A narrowed set of permissions carried by a root or child capability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +46,8 @@ pub struct RootCapability {
     task_id: Uuid,
     permissions: PermissionSet,
     expires_at: DateTime<Utc>,
+    token: Vec<u8>,
+    root_public_key: Vec<u8>,
 }
 
 /// A child capability created only by appending caveats that narrow its parent.
@@ -51,6 +57,8 @@ pub struct ChildCapability {
     permissions: PermissionSet,
     expires_at: DateTime<Utc>,
     caveats: Vec<Caveat>,
+    token: Vec<u8>,
+    root_public_key: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +84,14 @@ pub enum CapabilityError {
     TtlWidened,
     #[error("requested TTL cannot be represented safely")]
     TtlOverflow,
+    #[error("failed to build or parse biscuit token: {0}")]
+    Biscuit(String),
+}
+
+impl From<biscuit_codec::CodecError> for CapabilityError {
+    fn from(value: biscuit_codec::CodecError) -> Self {
+        CapabilityError::Biscuit(value.to_string())
+    }
 }
 
 impl PermissionSet {
@@ -108,6 +124,18 @@ impl PermissionSet {
         self.network
     }
 
+    pub fn readable_roots(&self) -> &BTreeSet<PathBuf> {
+        &self.readable_roots
+    }
+
+    pub fn writable_roots(&self) -> &BTreeSet<PathBuf> {
+        &self.writable_roots
+    }
+
+    pub fn exec_binaries(&self) -> &BTreeSet<String> {
+        &self.exec_binaries
+    }
+
     fn contains_all_roots(&self, requested: &BTreeSet<PathBuf>, writable: bool) -> bool {
         let parent_roots = if writable {
             &self.writable_roots
@@ -127,22 +155,64 @@ impl PermissionSet {
             .iter()
             .all(|binary| self.exec_binaries.contains(binary))
     }
+
+    pub(crate) fn from_codec(
+        readable_roots: BTreeSet<PathBuf>,
+        writable_roots: BTreeSet<PathBuf>,
+        exec_binaries: BTreeSet<String>,
+        network: NetworkPolicy,
+    ) -> Self {
+        Self {
+            readable_roots,
+            writable_roots,
+            exec_binaries,
+            network,
+        }
+    }
+
+    pub(crate) fn readable_roots_iter(&self) -> impl Iterator<Item = &PathBuf> {
+        self.readable_roots.iter()
+    }
+
+    pub(crate) fn writable_roots_iter(&self) -> impl Iterator<Item = &PathBuf> {
+        self.writable_roots.iter()
+    }
+
+    pub(crate) fn exec_binaries_iter(&self) -> impl Iterator<Item = &str> {
+        self.exec_binaries.iter().map(|s| s.as_str())
+    }
 }
 
 impl RootCapability {
     pub fn mint(manifest: &TaskManifest, now: DateTime<Utc>) -> Result<Self, CapabilityError> {
         manifest.validate()?;
         let expires_at = checked_expires_at(now, manifest.ttl_seconds)?;
+        let permissions = PermissionSet::from_manifest(manifest)?;
+
+        let keypair = KeyPair::new();
+        let root_public_key = keypair.public().to_bytes().to_vec();
+        let token =
+            biscuit_codec::build_root_token(manifest.task_id, &permissions, expires_at, &keypair)?;
 
         Ok(Self {
             task_id: manifest.task_id,
-            permissions: PermissionSet::from_manifest(manifest)?,
+            permissions,
             expires_at,
+            token,
+            root_public_key,
         })
     }
 
     pub fn permissions(&self) -> &PermissionSet {
         &self.permissions
+    }
+
+    pub fn token(&self) -> &[u8] {
+        &self.token
+    }
+
+    pub fn root_public_key(&self) -> &[u8] {
+        &self.root_public_key
     }
 
     pub fn attenuate(
@@ -160,6 +230,16 @@ impl RootCapability {
             network: request.network,
         };
 
+        let root_public_key = parse_public_key(&self.root_public_key)?;
+        let token = biscuit_codec::append_block(
+            &self.token,
+            root_public_key,
+            1,
+            &permissions,
+            expires_at,
+            request.request_binding.as_ref(),
+        )?;
+
         Ok(ChildCapability {
             task_id: self.task_id,
             caveats: vec![Caveat {
@@ -169,6 +249,8 @@ impl RootCapability {
             }],
             permissions,
             expires_at,
+            token,
+            root_public_key: self.root_public_key.clone(),
         })
     }
 }
@@ -189,6 +271,17 @@ impl ChildCapability {
             network: request.network,
         };
 
+        let next_block_id = (self.caveats.len() as i64) + 1;
+        let root_public_key = parse_public_key(&self.root_public_key)?;
+        let token = biscuit_codec::append_block(
+            &self.token,
+            root_public_key,
+            next_block_id,
+            &permissions,
+            expires_at,
+            request.request_binding.as_ref(),
+        )?;
+
         let mut caveats = self.caveats.clone();
         caveats.push(Caveat {
             permissions: permissions.clone(),
@@ -201,6 +294,8 @@ impl ChildCapability {
             permissions,
             expires_at,
             caveats,
+            token,
+            root_public_key: self.root_public_key.clone(),
         })
     }
 
@@ -218,6 +313,25 @@ impl ChildCapability {
             .rev()
             .find_map(|caveat| caveat.request_binding.as_ref())
     }
+
+    pub fn token(&self) -> &[u8] {
+        &self.token
+    }
+
+    pub fn root_public_key(&self) -> &[u8] {
+        &self.root_public_key
+    }
+
+    pub fn verify_signature(&self) -> Result<(), CapabilityError> {
+        let public_key = parse_public_key(&self.root_public_key)?;
+        biscuit_codec::verify_signature(&self.token, public_key)?;
+        Ok(())
+    }
+}
+
+fn parse_public_key(bytes: &[u8]) -> Result<biscuit_auth::PublicKey, CapabilityError> {
+    biscuit_auth::PublicKey::from_bytes(bytes)
+        .map_err(|e| CapabilityError::Biscuit(format!("invalid root public key: {e}")))
 }
 
 pub fn hash_tool_arguments(tool_name: &str, canonical_arguments: &[u8], nonce: Uuid) -> [u8; 32] {
@@ -503,6 +617,63 @@ mod tests {
 
         assert!(!root.permissions().allows_read(link.join("secret.txt")));
         assert!(!root.permissions().allows_write(link.join("secret.txt")));
+    }
+
+    #[test]
+    fn root_token_decodes_to_minted_state() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let manifest = root_manifest();
+        let root = RootCapability::mint(&manifest, now).unwrap();
+
+        let public_key = parse_public_key(root.root_public_key()).unwrap();
+        let decoded = biscuit_codec::decode_state(root.token(), public_key).unwrap();
+
+        assert_eq!(decoded.task_id, manifest.task_id);
+        assert_eq!(decoded.block_id, 0);
+        assert_eq!(&decoded.permissions, root.permissions());
+        assert_eq!(decoded.expires_at, now + Duration::seconds(60));
+        assert!(decoded.request_binding.is_none());
+    }
+
+    #[test]
+    fn attenuated_token_decodes_to_latest_block_state() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let root = RootCapability::mint(&root_manifest(), now).unwrap();
+        let nonce = Uuid::nil();
+        let argument_hash = hash_tool_arguments("fs_read", b"args", nonce);
+        let request = AttenuationRequest {
+            readable_roots: ["/repo/pkg".into()].into_iter().collect(),
+            writable_roots: BTreeSet::new(),
+            exec_binaries: ["python".to_string()].into_iter().collect(),
+            network: NetworkPolicy::DenyAll,
+            ttl_seconds: 30,
+            request_binding: Some(RequestBinding {
+                tool_name: "fs_read".to_string(),
+                argument_hash,
+                nonce,
+            }),
+        };
+        let child = root.attenuate(request, now).unwrap();
+
+        let public_key = parse_public_key(child.root_public_key()).unwrap();
+        let decoded = biscuit_codec::decode_state(child.token(), public_key).unwrap();
+
+        assert_eq!(decoded.block_id, 1);
+        assert_eq!(&decoded.permissions, child.permissions());
+        assert_eq!(decoded.expires_at, now + Duration::seconds(30));
+        let binding = decoded.request_binding.expect("binding present");
+        assert_eq!(binding.tool_name, "fs_read");
+        assert_eq!(binding.argument_hash, argument_hash);
+        assert_eq!(binding.nonce, nonce);
+    }
+
+    #[test]
+    fn token_rejects_wrong_root_public_key() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let root = RootCapability::mint(&root_manifest(), now).unwrap();
+        let other_keypair = biscuit_auth::KeyPair::new();
+
+        assert!(biscuit_codec::verify_signature(root.token(), other_keypair.public()).is_err());
     }
 
     proptest! {

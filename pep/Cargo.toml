@@ -11,3 +11,9 @@ chrono.workspace = true
 thiserror.workspace = true
 warden-capability = { path = "../capability" }
 
+[dev-dependencies]
+biscuit-auth = { workspace = true }
+serde_json.workspace = true
+uuid.workspace = true
+warden-manifest = { path = "../manifest" }
+

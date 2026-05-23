@@ -10,3 +10,9 @@ rust-version.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 warden-capability = { path = "../capability" }
+
+[dev-dependencies]
+chrono.workspace = true
+proptest.workspace = true
+uuid.workspace = true
+warden-manifest = { path = "../manifest" }
