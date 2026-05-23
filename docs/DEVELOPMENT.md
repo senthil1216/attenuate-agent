@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust 1.85. The repository includes `rust-toolchain.toml`.
+- Rust 1.88. The repository includes `rust-toolchain.toml`.
 - Linux for enforced sandbox containment. macOS is development-only and does not provide the final containment guarantee.
 
 ## Common commands
