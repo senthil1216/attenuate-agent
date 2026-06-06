@@ -1,3 +1,7 @@
 /target/
 /.DS_Store
 
+
+# Demo run artifacts
+*.log
+demo/artifacts/

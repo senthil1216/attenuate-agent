@@ -1,0 +1,13 @@
+{
+  "task_id": "00000000-0000-0000-0000-000000000001",
+  "repo_root": "/tmp/warden-demo-fixture",
+  "ttl_seconds": 120,
+  "filesystem": {
+    "readable_roots": ["/tmp/warden-demo-fixture"],
+    "writable_roots": ["/tmp/warden-demo-fixture/src"]
+  },
+  "exec": {
+    "allowed_binaries": ["python", "python3", "pytest", "echo"]
+  },
+  "network": "DenyAll"
+}

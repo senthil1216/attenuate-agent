@@ -37,11 +37,27 @@ fn main() -> Result<()> {
 
     for outcome in orchestrator.run(calls) {
         let (tag, detail) = match &outcome.decision {
-            StepDecision::Allowed(output) => ("ALLOW", format!("{output:?}")),
+            StepDecision::Allowed(output) => {
+                let short = match output {
+                    warden_tools::ToolOutput::Read { content } => {
+                        format!("read {} bytes", content.len())
+                    }
+                    warden_tools::ToolOutput::Write { bytes_written } => {
+                        format!("wrote {bytes_written} bytes")
+                    }
+                    warden_tools::ToolOutput::Exec { status, .. } => {
+                        format!("exec status={status:?}")
+                    }
+                    warden_tools::ToolOutput::Network { bytes_sent } => {
+                        format!("sent {bytes_sent} bytes")
+                    }
+                };
+                ("ALLOW", short)
+            }
             StepDecision::Denied(reason) => ("DENY ", reason.clone()),
             StepDecision::Errored(reason) => ("ERROR", reason.clone()),
         };
-        println!("[{tag}] {:8} {detail}", outcome.call.tool_name());
+        println!("[{tag}] {:8} {}", outcome.call.tool_name(), detail);
     }
 
     println!(
@@ -49,7 +65,7 @@ fn main() -> Result<()> {
         orchestrator.audit_log().len()
     );
     for entry in orchestrator.audit_log() {
-        println!("{:?}", entry.event);
+        println!("{}", entry.event); // uses Display for human-readable format
     }
 
     Ok(())
