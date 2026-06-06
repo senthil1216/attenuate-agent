@@ -299,13 +299,14 @@ struct RawFunctionCall {
 
 /// Fetch a single round of tool calls from an OpenAI-compatible endpoint.
 /// messages should contain the current conversation state.
+/// Returns (ToolCall, tool_call_id) so the caller can feed results back in multi-turn use.
 /// Parses directly into the existing ToolCall type.
 pub fn fetch_tool_calls_from_model(
     base_url: &str,
     model: &str,
     api_key: Option<&str>,
     messages: Vec<ChatMessage>,
-) -> Result<Vec<ToolCall>> {
+) -> Result<Vec<(ToolCall, String)>> {
     let client = Client::new();
     let tools = build_demo_tools();
     let req = ChatRequest {
@@ -341,7 +342,7 @@ pub fn fetch_tool_calls_from_model(
     if let Some(choice) = chat.choices.first() {
         for raw in &choice.message.tool_calls {
             if let Some(call) = parse_raw_tool_call(&raw.function) {
-                calls.push(call);
+                calls.push((call, raw.id.clone()));
             }
         }
     }
@@ -455,4 +456,77 @@ pub fn build_demo_initial_messages(task_description: &str) -> Vec<ChatMessage> {
             tool_call_id: None,
         },
     ]
+}
+
+/// A stateful client for the "principal" (the untrusted model or other source).
+/// This is the principal-client layer you can build the orchestrator around.
+/// It maintains the conversation messages for multi-turn tool use.
+///
+/// Example use for multi-turn:
+/// let mut principal = OpenAiPrincipalClient::new(base_url, model, api_key, initial_messages);
+/// let calls = principal.next_tool_calls()?;
+/// // for each call: ... execute ...
+/// principal.add_tool_result(&tool_call_id, &result_string);
+/// let more_calls = principal.next_tool_calls()?;
+pub struct OpenAiPrincipalClient {
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    messages: Vec<ChatMessage>,
+}
+
+impl OpenAiPrincipalClient {
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: Option<String>,
+        initial_messages: Vec<ChatMessage>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into(),
+            model: model.into(),
+            api_key,
+            messages: initial_messages,
+        }
+    }
+
+    /// Get the next set of tool calls from the model, using current messages.
+    /// Returns (ToolCall, tool_call_id) pairs so results can be fed back.
+    pub fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+        let calls_with_ids =
+            fetch_tool_calls_from_model(&self.base_url, &self.model, self.api_key.as_deref(), self.messages.clone())?;
+
+        if !calls_with_ids.is_empty() {
+            // Append assistant message with the tool calls (for the model's next turn).
+            let tool_calls_for_msg: Vec<RawToolCall> = calls_with_ids
+                .iter()
+                .map(|(call, id)| RawToolCall {
+                    id: id.clone(),
+                    function: RawFunctionCall {
+                        name: call.tool_name().to_string(),
+                        arguments: "{}".to_string(), // server typically only needs the id for tool results
+                    },
+                })
+                .collect();
+
+            self.messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(tool_calls_for_msg),
+                tool_call_id: None,
+            });
+        }
+
+        Ok(calls_with_ids)
+    }
+
+    /// Feed a tool execution result back into the conversation for the next model call.
+    pub fn add_tool_result(&mut self, tool_call_id: &str, content: &str) {
+        self.messages.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+        });
+    }
 }

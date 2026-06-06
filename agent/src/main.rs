@@ -44,7 +44,8 @@ fn main() -> Result<()> {
         let messages = warden_agent::build_demo_initial_messages(task);
 
         eprintln!("M2: querying live principal at {} model={}", base_url, model);
-        warden_agent::fetch_tool_calls_from_model(&base_url, &model, api_key.as_deref(), messages)?
+        let calls_with_ids = warden_agent::fetch_tool_calls_from_model(&base_url, &model, api_key.as_deref(), messages)?;
+        calls_with_ids.into_iter().map(|(c, _id)| c).collect()
     } else {
         eprintln!(
             "usage (M1 scripted): AUTHZ=on|off {} <manifest.json> <calls.json>\n\
