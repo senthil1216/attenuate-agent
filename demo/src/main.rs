@@ -151,7 +151,10 @@ fn handle_connection(mut stream: TcpStream, log_path: &str) -> Result<()> {
     let entry = format!(
         "[{}]\nfrom: {}\npayload: {}\n---\n",
         chrono::Utc::now().to_rfc3339(),
-        stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".into()),
+        stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "unknown".into()),
         payload.trim_end()
     );
 
@@ -161,7 +164,11 @@ fn handle_connection(mut stream: TcpStream, log_path: &str) -> Result<()> {
         .open(log_path)?;
     file.write_all(entry.as_bytes())?;
 
-    println!("📥 Received {} bytes from exfil attempt, logged to {}", buf.len(), log_path);
+    println!(
+        "📥 Received {} bytes from exfil attempt, logged to {}",
+        buf.len(),
+        log_path
+    );
     Ok(())
 }
 
@@ -265,19 +272,49 @@ fn run_contrast() -> Result<()> {
 
     // Robust detection based on behavior + sink (not just content strings,
     // because Allowed reads now print "read N bytes" for cleanliness).
-    let secret_leaked_in_vuln = vuln_stdout.contains("read 17 bytes") || !sink_content.trim().is_empty();
+    let secret_leaked_in_vuln =
+        vuln_stdout.contains("read 17 bytes") || !sink_content.trim().is_empty();
     let secret_denied_in_prot = prot_stdout.contains("read path is outside capability scope");
 
     println!("Secret canary read (the injected exfil target):");
-    println!("  vuln (off):     {}", if secret_leaked_in_vuln { "SUCCEEDED — canary content was read" } else { "did not leak (unexpected)" });
-    println!("  protected (on): {}", if secret_denied_in_prot { "DENIED — \"read path is outside capability scope\"" } else { "unexpected" });
+    println!(
+        "  vuln (off):     {}",
+        if secret_leaked_in_vuln {
+            "SUCCEEDED — canary content was read"
+        } else {
+            "did not leak (unexpected)"
+        }
+    );
+    println!(
+        "  protected (on): {}",
+        if secret_denied_in_prot {
+            "DENIED — \"read path is outside capability scope\""
+        } else {
+            "unexpected"
+        }
+    );
 
-    let network_succeeded_in_vuln = vuln_stdout.contains("sent 19 bytes") || !sink_content.trim().is_empty();
+    let network_succeeded_in_vuln =
+        vuln_stdout.contains("sent 19 bytes") || !sink_content.trim().is_empty();
     let network_denied_in_prot = prot_stdout.contains("network policy denies all egress");
 
     println!("\nNetwork exfil attempt (the second part of the injection):");
-    println!("  vuln (off):     {}", if network_succeeded_in_vuln { "SUCCEEDED — payload reached the canary sink" } else { "no" });
-    println!("  protected (on): {}", if network_denied_in_prot { "DENIED — \"network policy denies all egress\"" } else { "no" });
+    println!(
+        "  vuln (off):     {}",
+        if network_succeeded_in_vuln {
+            "SUCCEEDED — payload reached the canary sink"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  protected (on): {}",
+        if network_denied_in_prot {
+            "DENIED — \"network policy denies all egress\""
+        } else {
+            "no"
+        }
+    );
 
     println!("\nSink log (should only have content from the vulnerable run):");
     if sink_content.trim().is_empty() {

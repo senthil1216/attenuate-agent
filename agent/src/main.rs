@@ -39,10 +39,18 @@ fn main() -> Result<()> {
         let (tag, detail) = match &outcome.decision {
             StepDecision::Allowed(output) => {
                 let short = match output {
-                    warden_tools::ToolOutput::Read { content } => format!("read {} bytes", content.len()),
-                    warden_tools::ToolOutput::Write { bytes_written } => format!("wrote {} bytes", bytes_written),
-                    warden_tools::ToolOutput::Exec { status, .. } => format!("exec status={:?}", status),
-                    warden_tools::ToolOutput::Network { bytes_sent } => format!("sent {} bytes", bytes_sent),
+                    warden_tools::ToolOutput::Read { content } => {
+                        format!("read {} bytes", content.len())
+                    }
+                    warden_tools::ToolOutput::Write { bytes_written } => {
+                        format!("wrote {} bytes", bytes_written)
+                    }
+                    warden_tools::ToolOutput::Exec { status, .. } => {
+                        format!("exec status={:?}", status)
+                    }
+                    warden_tools::ToolOutput::Network { bytes_sent } => {
+                        format!("sent {} bytes", bytes_sent)
+                    }
                 };
                 ("ALLOW", short)
             }
@@ -57,7 +65,7 @@ fn main() -> Result<()> {
         orchestrator.audit_log().len()
     );
     for entry in orchestrator.audit_log() {
-        println!("{}", entry.event);  // uses Display for human-readable format
+        println!("{}", entry.event); // uses Display for human-readable format
     }
 
     Ok(())
