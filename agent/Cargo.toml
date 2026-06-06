@@ -8,7 +8,15 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+warden-audit = { path = "../audit" }
 warden-capability = { path = "../capability" }
 warden-manifest = { path = "../manifest" }
 warden-tools = { path = "../tools" }
+
+[dev-dependencies]
+warden-manifest = { path = "../manifest" }
 

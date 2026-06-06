@@ -1,3 +1,6 @@
+use serde::{Deserialize, Serialize};
+use std::io::Write as _;
+use std::path::PathBuf;
 use uuid::Uuid;
 use warden_capability::{hash_tool_arguments, ChildCapability, RequestBinding};
 use warden_pdp::{decide, Decision, ToolRequest};
@@ -11,6 +14,8 @@ pub enum ToolError {
     Serialize(#[from] serde_json::Error),
     #[error("tool request denied: {0}")]
     Denied(String),
+    #[error("tool execution io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub fn authorize_only(
@@ -50,6 +55,129 @@ fn tool_name(request: &ToolRequest) -> &'static str {
         ToolRequest::Exec { .. } => "exec",
         ToolRequest::Network => "network",
     }
+}
+
+/// A concrete tool invocation requested by the (untrusted) principal.
+///
+/// This is the *execution* view: it carries the parameters needed to actually
+/// perform the action. Its `to_request()` projection is the *authorization*
+/// view consumed by the PEP/PDP — the policy decision never needs the payload,
+/// only the shape of the request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolCall {
+    FsRead {
+        path: PathBuf,
+    },
+    FsWrite {
+        path: PathBuf,
+        contents: String,
+    },
+    Exec {
+        binary: String,
+        args: Vec<String>,
+    },
+    Network {
+        host: String,
+        port: u16,
+        payload: String,
+    },
+}
+
+impl ToolCall {
+    /// Project the execution intent down to the authorization request the
+    /// PDP reasons about.
+    pub fn to_request(&self) -> ToolRequest {
+        match self {
+            ToolCall::FsRead { path } => ToolRequest::Read {
+                path: path.display().to_string(),
+            },
+            ToolCall::FsWrite { path, .. } => ToolRequest::Write {
+                path: path.display().to_string(),
+            },
+            ToolCall::Exec { binary, .. } => ToolRequest::Exec {
+                binary: binary.clone(),
+            },
+            ToolCall::Network { .. } => ToolRequest::Network,
+        }
+    }
+
+    pub fn tool_name(&self) -> &'static str {
+        match self {
+            ToolCall::FsRead { .. } => "fs_read",
+            ToolCall::FsWrite { .. } => "fs_write",
+            ToolCall::Exec { .. } => "exec",
+            ToolCall::Network { .. } => "network",
+        }
+    }
+}
+
+/// The result of actually executing a tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolOutput {
+    Read {
+        content: String,
+    },
+    Write {
+        bytes_written: usize,
+    },
+    Exec {
+        status: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+    Network {
+        bytes_sent: usize,
+    },
+}
+
+/// Perform the side effect with NO authorization check.
+///
+/// This is the ambient-authority path used by the deliberately vulnerable
+/// `AUTHZ=off` baseline. It is intentionally not reachable when enforcement is
+/// on — `dispatch` is the only authorized entry point.
+pub fn execute(call: &ToolCall) -> Result<ToolOutput, ToolError> {
+    match call {
+        ToolCall::FsRead { path } => Ok(ToolOutput::Read {
+            content: std::fs::read_to_string(path)?,
+        }),
+        ToolCall::FsWrite { path, contents } => {
+            std::fs::write(path, contents)?;
+            Ok(ToolOutput::Write {
+                bytes_written: contents.len(),
+            })
+        }
+        ToolCall::Exec { binary, args } => {
+            let output = std::process::Command::new(binary).args(args).output()?;
+            Ok(ToolOutput::Exec {
+                status: output.status.code(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            })
+        }
+        ToolCall::Network {
+            host,
+            port,
+            payload,
+        } => {
+            let mut stream = std::net::TcpStream::connect((host.as_str(), *port))?;
+            stream.write_all(payload.as_bytes())?;
+            Ok(ToolOutput::Network {
+                bytes_sent: payload.len(),
+            })
+        }
+    }
+}
+
+/// The single authorized tool entry point: verify the capability at the PEP,
+/// decide at the PDP, and only then perform the side effect. A denial returns
+/// before any side effect occurs.
+pub fn dispatch(
+    capability: ChildCapability,
+    call: &ToolCall,
+    nonce: Option<Uuid>,
+) -> Result<ToolOutput, ToolError> {
+    authorize_only(capability, call.to_request(), nonce)?;
+    execute(call)
 }
 
 #[cfg(test)]

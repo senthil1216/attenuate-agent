@@ -1,0 +1,12 @@
+# Standalone — its own [workspace] table keeps it fully out of the parent build.
+[workspace]
+
+[package]
+name = "landlock-spike"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+landlock = "0.4"
+seccompiler = "0.4"
+libc = "0.2"
