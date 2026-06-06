@@ -613,7 +613,11 @@ mod tests {
         };
         let call = parse_raw_tool_call(&func).expect("valid");
         match call {
-            ToolCall::Network { host, port, payload } => {
+            ToolCall::Network {
+                host,
+                port,
+                payload,
+            } => {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 9999);
                 assert_eq!(payload, "secret");
