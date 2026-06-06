@@ -331,7 +331,7 @@ pub fn fetch_tool_calls_from_model(
 
     if let Some(key) = api_key {
         if !key.is_empty() && key != "no-key" {
-            builder = builder.header("Authorization", format!("Bearer {}", key));
+            builder = builder.header("Authorization", format!("Bearer {key}"));
         }
     }
 
@@ -339,7 +339,7 @@ pub fn fetch_tool_calls_from_model(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().unwrap_or_default();
-        return Err(anyhow::anyhow!("model API error ({}): {}", status, text));
+        return Err(anyhow::anyhow!("model API error ({status}): {text}"));
     }
 
     let chat: ChatResponse = resp.json()?;
