@@ -342,10 +342,8 @@ fn run_internal_listener(port: u16, log_path: &str) -> Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     // We don't print here because it would interleave with contrast output.
 
-    for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let _ = handle_connection(stream, log_path);
-        }
+    for stream in listener.incoming().flatten() {
+        let _ = handle_connection(stream, log_path);
     }
     Ok(())
 }
