@@ -173,6 +173,8 @@ impl Orchestrator {
     /// Run a fixed, pre-decided sequence of tool calls (scripted / replay path).
     /// Routes through the same agentic loop a live model uses.
     pub fn run(&mut self, calls: Vec<ToolCall>) -> Vec<StepOutcome> {
+        // ScriptedPrincipal yields one call per turn, so we need one turn per
+        // call plus a final turn that returns empty and ends the loop: len()+1.
         let max_turns = calls.len() + 1;
         let mut scripted = ScriptedPrincipal::new(calls);
         self.run_principal(&mut scripted, max_turns)
@@ -191,10 +193,11 @@ impl Orchestrator {
         for _turn in 0..max_turns {
             let calls = match principal.next_tool_calls() {
                 Ok(calls) => calls,
-                Err(error) => {
-                    eprintln!("principal error, ending loop: {error}");
-                    break;
-                }
+                // A principal error (transport/JSON/model failure) terminates the
+                // loop and returns the outcomes accumulated so far — no side
+                // effect in library code. A Principal that wants to surface the
+                // error should do so within its own next_tool_calls.
+                Err(_error) => break,
             };
             if calls.is_empty() {
                 break;
@@ -629,20 +632,12 @@ impl OpenAiPrincipalClient {
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
     }
-}
 
-impl Principal for OpenAiPrincipalClient {
-    /// Ask the model for its next tool calls, recording its turn VERBATIM
-    /// (faithful arguments + ids) so the replayed conversation reflects exactly
-    /// what the model asked for — required for correct multi-turn behaviour.
-    fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
-        let assistant = post_chat(
-            &self.base_url,
-            &self.model,
-            self.api_key.as_deref(),
-            &self.messages,
-        )?;
-
+    /// Record the model's turn verbatim, then split its tool calls into
+    /// parseable ones (returned for execution) and unparseable ones (answered
+    /// immediately with an error tool result so no `tool_call` id is left
+    /// orphaned — the next request would otherwise be an invalid conversation).
+    fn ingest_assistant(&mut self, assistant: AssistantMessage) -> Vec<(ToolCall, String)> {
         if !assistant.tool_calls.is_empty() || assistant.content.is_some() {
             self.messages.push(ChatMessage {
                 role: "assistant".to_string(),
@@ -656,11 +651,35 @@ impl Principal for OpenAiPrincipalClient {
             });
         }
 
-        Ok(assistant
-            .tool_calls
-            .iter()
-            .filter_map(|raw| parse_raw_tool_call(&raw.function).map(|call| (call, raw.id.clone())))
-            .collect())
+        let mut calls = Vec::new();
+        for raw in &assistant.tool_calls {
+            match parse_raw_tool_call(&raw.function) {
+                Some(call) => calls.push((call, raw.id.clone())),
+                None => self.add_tool_result(
+                    &raw.id,
+                    &format!(
+                        "ERROR: unparseable or unknown tool call '{}' (bad arguments or unsupported tool)",
+                        raw.function.name
+                    ),
+                ),
+            }
+        }
+        calls
+    }
+}
+
+impl Principal for OpenAiPrincipalClient {
+    /// Ask the model for its next tool calls, recording its turn VERBATIM
+    /// (faithful arguments + ids) so the replayed conversation reflects exactly
+    /// what the model asked for — required for correct multi-turn behaviour.
+    fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+        let assistant = post_chat(
+            &self.base_url,
+            &self.model,
+            self.api_key.as_deref(),
+            &self.messages,
+        )?;
+        Ok(self.ingest_assistant(assistant))
     }
 
     /// Feed a tool execution result back into the conversation for the next turn.
@@ -738,6 +757,57 @@ mod tests {
             "principal should be told it was denied, got: {}",
             principal.feedback[0]
         );
+    }
+
+    #[test]
+    fn ingest_assistant_answers_unparseable_calls_to_keep_history_valid() {
+        let mut client = OpenAiPrincipalClient::new(
+            "http://unused",
+            "test-model",
+            None,
+            build_demo_initial_messages("task"),
+        );
+        let assistant = AssistantMessage {
+            content: None,
+            tool_calls: vec![
+                RawToolCall {
+                    id: "good".to_string(),
+                    function: RawFunctionCall {
+                        name: "fs_read".to_string(),
+                        arguments: r#"{"path":"/repo/x"}"#.to_string(),
+                    },
+                },
+                RawToolCall {
+                    id: "bad".to_string(),
+                    function: RawFunctionCall {
+                        name: "fs_read".to_string(),
+                        arguments: "not json".to_string(),
+                    },
+                },
+            ],
+        };
+
+        let calls = client.ingest_assistant(assistant);
+
+        // Only the parseable call is returned for execution.
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "good");
+
+        let msgs = client.messages();
+        // The assistant turn is recorded verbatim (with its tool_calls).
+        assert!(msgs
+            .iter()
+            .any(|m| m.role == "assistant" && m.tool_calls.is_some()));
+        // The unparseable id is answered now so the conversation stays valid...
+        assert!(
+            msgs.iter()
+                .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("bad")),
+            "unparseable tool_call id must receive an error tool result"
+        );
+        // ...while the parseable id is answered later by the loop, not here.
+        assert!(!msgs
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("good")));
     }
 
     #[test]

@@ -225,6 +225,17 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
         }
     };
 
+    // For scripted spawns, strip any inherited live-principal env so a stray
+    // exported BASE_URL can never turn a scripted run into a live one. (The
+    // agent also prefers an explicit calls file, so this is defense in depth.)
+    let strip_live_env = |cmd: &mut Command| {
+        if !live {
+            cmd.env_remove("BASE_URL")
+                .env_remove("MODEL")
+                .env_remove("API_KEY");
+        }
+    };
+
     // --- CLEAN RUN (baseline, no injection) — scripted only ---
     if !live {
         println!("\n╔════════════════════════════════════════════════════════════╗");
@@ -232,10 +243,10 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
         println!("╚════════════════════════════════════════════════════════════╝\n");
         println!("(Should succeed under both modes; shown with AUTHZ=on)\n");
 
-        let clean_out = Command::new(agent_bin)
-            .args(build_args(clean_calls))
-            .env("AUTHZ", "on")
-            .output()?;
+        let mut clean_cmd = Command::new(agent_bin);
+        clean_cmd.args(build_args(clean_calls)).env("AUTHZ", "on");
+        strip_live_env(&mut clean_cmd);
+        let clean_out = clean_cmd.output()?;
         let clean_stdout = String::from_utf8_lossy(&clean_out.stdout).to_string();
         print!("{clean_stdout}");
         if !clean_out.stderr.is_empty() {
@@ -250,10 +261,12 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
     println!("╚════════════════════════════════════════════════════════════╝\n");
     println!("(The malicious instructions in AGENT_NOTE.md should succeed)\n");
 
-    let vuln_out = Command::new(agent_bin)
+    let mut vuln_cmd = Command::new(agent_bin);
+    vuln_cmd
         .args(build_args(injected_calls))
-        .env("AUTHZ", "off")
-        .output()?;
+        .env("AUTHZ", "off");
+    strip_live_env(&mut vuln_cmd);
+    let vuln_out = vuln_cmd.output()?;
     let vuln_stdout = String::from_utf8_lossy(&vuln_out.stdout).to_string();
     print!("{vuln_stdout}");
     if !vuln_out.stderr.is_empty() {
@@ -267,10 +280,10 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
     println!("╚════════════════════════════════════════════════════════════╝\n");
     println!("(Out-of-scope actions must be structurally denied while legit work succeeds)\n");
 
-    let prot_out = Command::new(agent_bin)
-        .args(build_args(injected_calls))
-        .env("AUTHZ", "on")
-        .output()?;
+    let mut prot_cmd = Command::new(agent_bin);
+    prot_cmd.args(build_args(injected_calls)).env("AUTHZ", "on");
+    strip_live_env(&mut prot_cmd);
+    let prot_out = prot_cmd.output()?;
     let prot_stdout = String::from_utf8_lossy(&prot_out.stdout).to_string();
     print!("{prot_stdout}");
     if !prot_out.stderr.is_empty() {
