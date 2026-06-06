@@ -245,14 +245,14 @@ struct ChatRequest {
 }
 
 #[derive(Debug, Serialize, Clone)]
-struct ChatMessage {
-    role: String,
+pub struct ChatMessage {
+    pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<RawToolCall>>,
+    pub tool_calls: Option<Vec<RawToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,19 +282,22 @@ struct ChatChoice {
 struct AssistantMessage {
     #[serde(default)]
     tool_calls: Vec<RawToolCall>,
+    /// May contain final answer text when model does not emit tool_calls.
+    /// Reserved for multi-turn conversational use; currently unused in single-shot M2.
+    #[allow(dead_code)]
     content: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct RawToolCall {
-    id: String,
-    function: RawFunctionCall,
+pub struct RawToolCall {
+    pub id: String,
+    pub function: RawFunctionCall,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct RawFunctionCall {
-    name: String,
-    arguments: String,
+pub struct RawFunctionCall {
+    pub name: String,
+    pub arguments: String,
 }
 
 /// Fetch a single round of tool calls from an OpenAI-compatible endpoint.
@@ -307,7 +310,9 @@ pub fn fetch_tool_calls_from_model(
     api_key: Option<&str>,
     messages: Vec<ChatMessage>,
 ) -> Result<Vec<(ToolCall, String)>> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let tools = build_demo_tools();
     let req = ChatRequest {
         model: model.to_string(),
@@ -443,7 +448,8 @@ fn parse_raw_tool_call(func: &RawFunctionCall) -> Option<ToolCall> {
         }
         "network" => {
             let host = args.get("host")?.as_str()?.to_string();
-            let port = args.get("port")?.as_u64()? as u16;
+            let port_u64 = args.get("port")?.as_u64()?;
+            let port = u16::try_from(port_u64).ok()?;
             let payload = args.get("payload")?.as_str()?.to_string();
             Some(ToolCall::Network {
                 host,
@@ -547,5 +553,99 @@ impl OpenAiPrincipalClient {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_fs_read_valid() {
+        let func = RawFunctionCall {
+            name: "fs_read".to_string(),
+            arguments: r#"{"path":"/tmp/test.txt"}"#.to_string(),
+        };
+        let call = parse_raw_tool_call(&func).expect("valid");
+        match call {
+            ToolCall::FsRead { path } => assert_eq!(path, PathBuf::from("/tmp/test.txt")),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_fs_write_valid() {
+        let func = RawFunctionCall {
+            name: "fs_write".to_string(),
+            arguments: r#"{"path":"/tmp/out.txt","contents":"hello"}"#.to_string(),
+        };
+        let call = parse_raw_tool_call(&func).expect("valid");
+        match call {
+            ToolCall::FsWrite { path, contents } => {
+                assert_eq!(path, PathBuf::from("/tmp/out.txt"));
+                assert_eq!(contents, "hello");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_exec_valid() {
+        let func = RawFunctionCall {
+            name: "exec".to_string(),
+            arguments: r#"{"binary":"echo","args":["hi","there"]}"#.to_string(),
+        };
+        let call = parse_raw_tool_call(&func).expect("valid");
+        match call {
+            ToolCall::Exec { binary, args } => {
+                assert_eq!(binary, "echo");
+                assert_eq!(args, vec!["hi".to_string(), "there".to_string()]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_network_valid() {
+        let func = RawFunctionCall {
+            name: "network".to_string(),
+            arguments: r#"{"host":"127.0.0.1","port":9999,"payload":"secret"}"#.to_string(),
+        };
+        let call = parse_raw_tool_call(&func).expect("valid");
+        match call {
+            ToolCall::Network { host, port, payload } => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 9999);
+                assert_eq!(payload, "secret");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_unknown_tool() {
+        let func = RawFunctionCall {
+            name: "unknown".to_string(),
+            arguments: "{}".to_string(),
+        };
+        assert!(parse_raw_tool_call(&func).is_none());
+    }
+
+    #[test]
+    fn parse_malformed_args() {
+        let func = RawFunctionCall {
+            name: "fs_read".to_string(),
+            arguments: "not json".to_string(),
+        };
+        assert!(parse_raw_tool_call(&func).is_none());
+    }
+
+    #[test]
+    fn parse_network_bad_port() {
+        let func = RawFunctionCall {
+            name: "network".to_string(),
+            arguments: r#"{"host":"127.0.0.1","port":999999,"payload":"x"}"#.to_string(),
+        };
+        assert!(parse_raw_tool_call(&func).is_none());
     }
 }

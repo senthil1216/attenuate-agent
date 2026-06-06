@@ -27,6 +27,15 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
 
+    if args.len() < 2 {
+        eprintln!(
+            "usage (M1 scripted): AUTHZ=on|off {} <manifest.json> <calls.json>\n\
+             usage (M2 live):     BASE_URL=... MODEL=... [API_KEY=...] AUTHZ=on|off {} <manifest.json>",
+            args[0], args[0]
+        );
+        std::process::exit(2);
+    }
+
     let manifest: TaskManifest =
         serde_json::from_str(&std::fs::read_to_string(&args[1]).context("reading manifest")?)
             .context("parsing manifest json")?;
