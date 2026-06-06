@@ -14,6 +14,18 @@ cargo test --locked --workspace
 cargo check --locked -p warden-sandbox --features linux-containment
 ```
 
+### Demo harness (P3 showcase)
+
+```sh
+make demo-contrast          # one-command: clean + injected under off/on + listener + logs + KEY DIFFERENCES
+make demo-clean             # baseline (no injection)
+make demo-vuln              # injected + AUTHZ=off (leaks)
+make demo-protected         # injected + AUTHZ=on (denies malicious, keeps utility)
+make demo-listener          # standalone canary sink on 127.0.0.1:9999 -> sink.log
+```
+
+Artifacts go to cwd (or `demo/artifacts/` via helper). See `Makefile`, `demo/src/main.rs`, and `demo/artifacts/demo-results.md` (post-ready excerpt using your run outputs).
+
 ## Commit signing
 
 The `main` branch requires signed commits. SSH commit signing is the simplest setup for most contributors:

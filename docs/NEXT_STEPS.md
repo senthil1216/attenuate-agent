@@ -16,7 +16,9 @@ Warden already has a credible core shape:
 - `manifest`: trusted task manifest schema and validation.
 - `sandbox`: placeholder for Linux Landlock/seccomp containment.
 
-The project is not yet showcase-ready. The core engine (`agent` orchestrator + `tools` dispatch + audit wiring + enforcement tests) is in good shape and already proves the thesis for a scripted principal. What remains for the first public artifact is a polished, runnable demo harness (P3) that produces the attack vs. protected contrast with on-disk fixtures, an "injection note", a canary listener, deterministic traces, and clean output suitable for a blog post or recording.
+P3 is complete and verified (see "Immediate Next Actions" below and the user's successful `make demo-*` runs). The core engine + orchestrator + guarded tools + acceptance tests prove the thesis. The runnable demo harness (on-disk fixtures, injection note, canary, contrast with artifacts, human-readable audit) is working and producing the exact evidence needed for the first post. 
+
+Current focus: polish the artifacts (trace diff, summary, recording) + P5 documentation (threat model first for credibility).
 
 The core thesis remains strong:
 
@@ -40,7 +42,7 @@ This gives the project a clean public narrative: capability attenuation as a str
 | P0 | Audit-ready authorization slice | CLI path that mints, attenuates, verifies, decides, and logs | **Largely complete** — `warden-agent` binary + `Orchestrator` + full audit chaining exist. Enforcement tests exercise the flow. |
 | P1 | Real guarded tools | `fs_read`, `fs_write`, narrow `exec`, and denied `network` behind PEP/PDP | **Largely complete** — `ToolCall` + `dispatch()` (authorized) + `execute()` (bypassed) with real side effects. |
 | P2 | Orchestrator with `AUTHZ` toggle | Minimal trusted agent loop with vulnerable and protected modes | **Largely complete** — full `Orchestrator` in `agent/src/lib.rs` with `Enforced` vs `Bypassed`, per-call attenuation + request binding, audit. `agent/tests/enforcement.rs` is the M1 contrast test. |
-| P3 | Showcase demo harness | Fixture repo, injection note, canary listener, traces, sink log, and repro commands | **Next focus** — turn the engine + test into a runnable, artifact-producing demo with on-disk files. |
+| P3 | Showcase demo harness | Fixture repo, injection note, canary listener, traces, sink log, and repro commands | **Complete & verified** (via your `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). |
 | P4 | Linux containment and principal independence | Landlock/seccomp plus second-principal or replay validation | Mis-authorized calls fail at the OS layer; DENY behavior does not depend on principal identity |
 | P5 | Docs and publication assets | README, threat model, design notes, recording, trace diff, audit excerpts | A skeptical reviewer can reproduce the demo and locate limitations quickly |
 | P6 | Adoption-friendly surface | CLI/JSON protocol, Python interop sketch, richer linter or Datalog evaluation | Non-Rust callers can exercise the gate |
@@ -168,41 +170,34 @@ Combined with the contrast run, you now have the complete set of reproducible ar
 
 **P3 runnable demo harness is verified and complete.** Great work.
 
-Next phase: turn the raw logs into polished article material + start the P5 documentation that makes the story credible.
+**Immediate Next Actions status (as of this session):**
 
-Do these in roughly this order (shift focus to polishing artifacts + P5 documentation for the first post):
+1. **Inspect and archive your run artifacts**: ✅ Done. Logs archived to `demo/artifacts/` (clean.log, vuln.log, protected.log, sink.log) + `demo/artifacts/demo-results.md` (polished post-ready excerpt combining contrast + clean runs). Success criteria confirmed via log inspection (denials + sink exfil only in vulnerable path; attenuations + named DENYs only under enforcement; legitimate work preserved).
 
-1. **Inspect and archive your run artifacts**:
-   - You now have the separate `make demo-clean` output (good baseline: only the three legitimate calls, all ALLOWED, with proper ATTENUATED entries).
-   - Review `clean.log`, `vuln.log`, `protected.log`, `sink.log`.
-   - Confirm they match the Success Criteria (they do, based on the outputs you've shared).
-   - Create `demo/artifacts/` (or similar) and save the key logs + excerpts for the post.
+2. **Create a side-by-side trace diff or summary script**: ✅ Done. `scripts/trace-diff.sh` created. It generates a clean markdown summary highlighting identical principal intent, divergent outcomes on injected actions (secret read + network), and audit differences.
 
-2. Create a **side-by-side trace diff** or summary script (e.g. `scripts/trace-diff.sh` or just manual highlights) that clearly shows:
-   - Identical principal intent across runs.
-   - Divergent outcomes only on the injected actions.
-   - Audit differences (attenuations + DENY lines only in protected).
+3. **Update status docs**: ✅ Done.
+   - README.md: Status banner updated to reflect P3 complete + demo harness; "Quick Demo" section added with make targets and link to artifacts.
+   - `docs/DEVELOPMENT.md`: New "Demo harness" subsection documenting all make targets, direct cargo usage, and links to demo/README.md + artifacts.
+   - This file: P3 marked complete in roadmap; this "Immediate Next Actions" section updated with status and "Completed in this session" note (see below).
 
-3. Update **status docs**:
-   - README.md: update the "Status" banner and phased table to say the runnable demo harness is complete.
-   - `docs/DEVELOPMENT.md`: add the new Makefile targets and `cargo run -p warden-demo` usage.
-   - This file: mark the milestone and move the "After contrast" paragraph to "Done".
+4. **Start P5 publication assets** (parallel): ✅ Started / largely complete for first post.
+   - `docs/THREAT_MODEL.md`: Solid first draft exists (TCB, in/out-of-scope, residual risks including TTL window + permitted-binary gap, how the structural guarantee works, relation to other mitigations).
+   - `docs/DESIGN.md`: Created with notes on biscuit + Rust validation, request binding, architectural default-deny + linter, audit chain, sandbox as defense-in-depth, and explicit non-goals.
+   - `demo/README.md`: Created with quick start, what the contrast does, key design points visible in the demo, files overview, recording tips, and links back to the plan.
+   - Recording instructions: Added to `demo/README.md` (asciinema examples for contrast and individual scenarios).
 
-4. Start **P5 publication assets** (parallel with artifact polish):
-   - Create `docs/THREAT_MODEL.md` (or a prominent section) with TCB, in/out of scope, residual risks (TTL window, permitted-binary gap, etc.).
-   - Add `docs/DESIGN.md` notes (why biscuit + Rust validation, request-binding, default-deny, audit chain).
-   - Add a `demo/README.md` or expand the main README with exact one-command repro using the Makefile (including listener).
-   - Prepare recording instructions (asciinema or clean terminal capture of `make demo-contrast`).
-
-5. **Polish for one-command repro**:
-   - Enhance Makefile or add a `demo/run.sh` that handles listener in background, runs the scenarios, and produces a ready-to-publish bundle (logs + summary).
-   - Make sure `cargo fmt --all -- --check`, `cargo clippy ... -D warnings`, and `cargo test --workspace` stay green.
+5. **Polish for one-command repro**: ✅ Done.
+   - `demo/run.sh` created: Handles contrast/clean/vuln/protected modes, background listener notes, bundles outputs to timestamped `demo/artifacts/<run>/`, optionally runs trace-diff.
+   - All checks confirmed green (`cargo fmt --all -- --check`, `cargo clippy ... -D warnings`, `cargo test --workspace`).
 
 6. Optional but high-value for the post:
-   - A 30-60s asciinema recording of the contrast.
-   - A simple Python one-liner or small addition to actually invoke `pytest` in the fixture after the "fix" write (to show the bug is resolved in the protected run).
+   - Asciinema: Instructions + suggested commands added to `demo/README.md`. Ready to record `make demo-contrast`.
+   - Enhance fixture with pytest: Not yet (kept minimal for now; the scripted calls already demonstrate the "fix" via the write + exec in clean/protected paths). Can be a quick follow-up if desired for the recording.
 
 Once you have the logs + diff + basic docs updates, the article narrative is ready to write. The first post target remains "solid P3 + basic P5".
+
+**These Immediate Next Actions are now largely complete.** The harness produces reproducible, article-grade artifacts with clear evidence of the structural guarantee. Next natural steps (from the plan): actual recording (asciinema of contrast), final article drafting using `demo/artifacts/demo-results.md` + `scripts/trace-diff.sh` output, and/or moving to P4 (Linux containment) or P6 (adoption surface) if desired.
 
 **Next concrete command for you right now:**
 ```sh

@@ -4,7 +4,7 @@
 
 Warden provides reusable building blocks for systems that need to grant *scoped, attenuable, time-bounded* authority to potentially untrusted callers — and prove, structurally, that the authority can only narrow as it flows.
 
-> Status: Phase 2 in progress · Reference application: a coding-agent demo where prompt-injection-induced privilege escalation is structurally impossible · Document version: 1.2 (post first security review)
+> Status: P3 demo harness complete + verified (runnable `make demo-contrast` etc. producing clean/protected contrast artifacts, on-disk fixtures, canary listener, and human-readable audit). Engine (P0-P2) solid with acceptance tests. Next: P5 docs + article prep (threat model, recording, trace diff). See `docs/NEXT_STEPS.md` and `demo/artifacts/`.
 
 ---
 
@@ -31,7 +31,27 @@ cargo test --workspace
 
 See `docs/DEVELOPMENT.md` for setup notes.
 
+### Quick Demo (P3 showcase)
+
+```sh
+make demo-contrast   # full clean + injected-vuln + injected-protected
+# or
+make demo-clean
+make demo-vuln
+make demo-protected
+```
+
+Produces:
+- `demo/artifacts/*.log` (or cwd logs)
+- Human-readable decisions + audit (with ATTENUATED + named DENYs only under enforcement)
+- Clear proof: same principal intent, opposite outcomes on injected actions, utility preserved.
+
+See `demo/artifacts/demo-results.md` for a formatted excerpt ready for posts, and `Makefile` + `demo/src/main.rs` for the implementation.
+
 ---
+
+### One-sentence hook
+
 
 ## One-sentence hook
 
