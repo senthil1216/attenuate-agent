@@ -70,6 +70,73 @@ pub enum StepDecision {
     Errored(String),
 }
 
+/// Maximum model turns the agentic loop runs before force-stopping. A runaway
+/// guard for live principals that never stop requesting tools.
+pub const DEFAULT_MAX_TURNS: usize = 16;
+
+/// An untrusted source of tool calls: a live model, a scripted replay, or a
+/// test mock. The orchestrator drives a `Principal` without trusting it — every
+/// call it returns is authorized before execution, and every result (including
+/// denials) is fed back so the principal can react on its next turn.
+pub trait Principal {
+    /// The next batch of `(call, call_id)` the principal wants to perform.
+    /// An empty vec signals the principal is finished.
+    fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>>;
+
+    /// Feed the result (or the denial reason) of a tool call back to the
+    /// principal so it informs the next turn.
+    fn add_tool_result(&mut self, call_id: &str, content: &str);
+}
+
+/// A deterministic principal that replays a fixed list of tool calls, one per
+/// turn, ignoring feedback. Keeps the scripted demo and the M1 tests model-free
+/// while exercising the exact same orchestration loop a live model uses.
+pub struct ScriptedPrincipal {
+    pending: std::collections::VecDeque<ToolCall>,
+}
+
+impl ScriptedPrincipal {
+    pub fn new(calls: Vec<ToolCall>) -> Self {
+        Self {
+            pending: calls.into(),
+        }
+    }
+}
+
+impl Principal for ScriptedPrincipal {
+    fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+        Ok(self
+            .pending
+            .pop_front()
+            .map(|call| vec![(call, "scripted".to_string())])
+            .unwrap_or_default())
+    }
+
+    fn add_tool_result(&mut self, _call_id: &str, _content: &str) {}
+}
+
+/// Render a decision into the tool-result text fed back to the principal. A
+/// denial is reported honestly so a live model sees it was refused (and may
+/// retry or give up) — exactly as it would against a real guarded runtime.
+fn decision_feedback(decision: &StepDecision) -> String {
+    match decision {
+        StepDecision::Allowed(ToolOutput::Read { content }) => content.clone(),
+        StepDecision::Allowed(ToolOutput::Write { bytes_written }) => {
+            format!("ok: wrote {bytes_written} bytes")
+        }
+        StepDecision::Allowed(ToolOutput::Exec {
+            status,
+            stdout,
+            stderr,
+        }) => format!("exit={status:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"),
+        StepDecision::Allowed(ToolOutput::Network { bytes_sent }) => {
+            format!("ok: sent {bytes_sent} bytes")
+        }
+        StepDecision::Denied(reason) => format!("DENIED by authorization policy: {reason}"),
+        StepDecision::Errored(reason) => format!("ERROR executing tool: {reason}"),
+    }
+}
+
 pub struct Orchestrator {
     mode: AuthzMode,
     task_id: Uuid,
@@ -103,9 +170,42 @@ impl Orchestrator {
         &self.audit_log
     }
 
-    /// Run a whole sequence of principal-emitted tool calls in order.
+    /// Run a fixed, pre-decided sequence of tool calls (scripted / replay path).
+    /// Routes through the same agentic loop a live model uses.
     pub fn run(&mut self, calls: Vec<ToolCall>) -> Vec<StepOutcome> {
-        calls.into_iter().map(|call| self.step(call)).collect()
+        let max_turns = calls.len() + 1;
+        let mut scripted = ScriptedPrincipal::new(calls);
+        self.run_principal(&mut scripted, max_turns)
+    }
+
+    /// Drive a principal to completion: each turn ask it for tool calls, enforce
+    /// each one, and feed the result (or the denial) back so the principal can
+    /// react. This is the agentic loop that lets a live model be genuinely
+    /// prompt-injected and then structurally contained.
+    pub fn run_principal<P: Principal>(
+        &mut self,
+        principal: &mut P,
+        max_turns: usize,
+    ) -> Vec<StepOutcome> {
+        let mut outcomes = Vec::new();
+        for _turn in 0..max_turns {
+            let calls = match principal.next_tool_calls() {
+                Ok(calls) => calls,
+                Err(error) => {
+                    eprintln!("principal error, ending loop: {error}");
+                    break;
+                }
+            };
+            if calls.is_empty() {
+                break;
+            }
+            for (call, call_id) in calls {
+                let outcome = self.step(call);
+                principal.add_tool_result(&call_id, &decision_feedback(&outcome.decision));
+                outcomes.push(outcome);
+            }
+        }
+        outcomes
     }
 
     pub fn step(&mut self, call: ToolCall) -> StepOutcome {
@@ -278,13 +378,12 @@ struct ChatChoice {
     message: AssistantMessage,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct AssistantMessage {
     #[serde(default)]
     tool_calls: Vec<RawToolCall>,
-    /// May contain final answer text when model does not emit tool_calls.
-    /// Reserved for multi-turn conversational use; currently unused in single-shot M2.
-    #[allow(dead_code)]
+    /// Final answer text when the model does not emit tool_calls; also replayed
+    /// verbatim into the conversation so multi-turn context stays faithful.
     content: Option<String>,
 }
 
@@ -300,24 +399,23 @@ pub struct RawFunctionCall {
     pub arguments: String,
 }
 
-/// Fetch a single round of tool calls from an OpenAI-compatible endpoint.
-/// messages should contain the current conversation state.
-/// Returns (ToolCall, tool_call_id) so the caller can feed results back in multi-turn use.
-/// Parses directly into the existing ToolCall type.
-pub fn fetch_tool_calls_from_model(
+/// POST the current conversation to an OpenAI-compatible `chat/completions`
+/// endpoint and return the assistant message (its tool calls + any content).
+/// Deterministic decoding (temperature 0 + fixed seed) so the same conversation
+/// yields the same tool calls — the demo's scientific control.
+fn post_chat(
     base_url: &str,
     model: &str,
     api_key: Option<&str>,
-    messages: Vec<ChatMessage>,
-) -> Result<Vec<(ToolCall, String)>> {
+    messages: &[ChatMessage],
+) -> Result<AssistantMessage> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let tools = build_demo_tools();
     let req = ChatRequest {
         model: model.to_string(),
-        messages,
-        tools,
+        messages: messages.to_vec(),
+        tools: build_demo_tools(),
         tool_choice: "auto".to_string(),
         temperature: 0.0,
         seed: Some(42),
@@ -328,7 +426,6 @@ pub fn fetch_tool_calls_from_model(
         .post(&url)
         .header("Content-Type", "application/json")
         .json(&req);
-
     if let Some(key) = api_key {
         if !key.is_empty() && key != "no-key" {
             builder = builder.header("Authorization", format!("Bearer {key}"));
@@ -343,15 +440,32 @@ pub fn fetch_tool_calls_from_model(
     }
 
     let chat: ChatResponse = resp.json()?;
-    let mut calls = Vec::new();
-    if let Some(choice) = chat.choices.first() {
-        for raw in &choice.message.tool_calls {
-            if let Some(call) = parse_raw_tool_call(&raw.function) {
-                calls.push((call, raw.id.clone()));
-            }
-        }
-    }
-    Ok(calls)
+    Ok(chat
+        .choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message)
+        .unwrap_or(AssistantMessage {
+            tool_calls: Vec::new(),
+            content: None,
+        }))
+}
+
+/// Fetch a single round of tool calls from an OpenAI-compatible endpoint.
+/// Returns `(ToolCall, tool_call_id)` pairs. Stateless; for multi-turn use the
+/// stateful [`OpenAiPrincipalClient`] via the [`Principal`] trait instead.
+pub fn fetch_tool_calls_from_model(
+    base_url: &str,
+    model: &str,
+    api_key: Option<&str>,
+    messages: Vec<ChatMessage>,
+) -> Result<Vec<(ToolCall, String)>> {
+    let assistant = post_chat(base_url, model, api_key, &messages)?;
+    Ok(assistant
+        .tool_calls
+        .iter()
+        .filter_map(|raw| parse_raw_tool_call(&raw.function).map(|call| (call, raw.id.clone())))
+        .collect())
 }
 
 fn build_demo_tools() -> Vec<OpenAiTool> {
@@ -511,47 +625,51 @@ impl OpenAiPrincipalClient {
         }
     }
 
-    /// Get the next set of tool calls from the model, using current messages.
-    /// Returns (ToolCall, tool_call_id) pairs so results can be fed back.
-    pub fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
-        let calls_with_ids = fetch_tool_calls_from_model(
+    /// Borrow the current conversation (useful for tests / inspection).
+    pub fn messages(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+}
+
+impl Principal for OpenAiPrincipalClient {
+    /// Ask the model for its next tool calls, recording its turn VERBATIM
+    /// (faithful arguments + ids) so the replayed conversation reflects exactly
+    /// what the model asked for — required for correct multi-turn behaviour.
+    fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+        let assistant = post_chat(
             &self.base_url,
             &self.model,
             self.api_key.as_deref(),
-            self.messages.clone(),
+            &self.messages,
         )?;
 
-        if !calls_with_ids.is_empty() {
-            // Append assistant message with the tool calls (for the model's next turn).
-            let tool_calls_for_msg: Vec<RawToolCall> = calls_with_ids
-                .iter()
-                .map(|(call, id)| RawToolCall {
-                    id: id.clone(),
-                    function: RawFunctionCall {
-                        name: call.tool_name().to_string(),
-                        arguments: "{}".to_string(), // server typically only needs the id for tool results
-                    },
-                })
-                .collect();
-
+        if !assistant.tool_calls.is_empty() || assistant.content.is_some() {
             self.messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: None,
-                tool_calls: Some(tool_calls_for_msg),
+                content: assistant.content.clone(),
+                tool_calls: if assistant.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(assistant.tool_calls.clone())
+                },
                 tool_call_id: None,
             });
         }
 
-        Ok(calls_with_ids)
+        Ok(assistant
+            .tool_calls
+            .iter()
+            .filter_map(|raw| parse_raw_tool_call(&raw.function).map(|call| (call, raw.id.clone())))
+            .collect())
     }
 
-    /// Feed a tool execution result back into the conversation for the next model call.
-    pub fn add_tool_result(&mut self, tool_call_id: &str, content: &str) {
+    /// Feed a tool execution result back into the conversation for the next turn.
+    fn add_tool_result(&mut self, call_id: &str, content: &str) {
         self.messages.push(ChatMessage {
             role: "tool".to_string(),
             content: Some(content.to_string()),
             tool_calls: None,
-            tool_call_id: Some(tool_call_id.to_string()),
+            tool_call_id: Some(call_id.to_string()),
         });
     }
 }
@@ -559,6 +677,81 @@ impl OpenAiPrincipalClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use warden_manifest::{ExecPolicy, FilesystemPolicy, NetworkPolicy, TaskManifest};
+
+    /// A model-free principal that scripts turns and records the feedback it
+    /// receives, so the agentic loop can be tested without any HTTP.
+    struct MockPrincipal {
+        turns: std::collections::VecDeque<Vec<(ToolCall, String)>>,
+        feedback: Vec<String>,
+    }
+
+    impl Principal for MockPrincipal {
+        fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+            Ok(self.turns.pop_front().unwrap_or_default())
+        }
+        fn add_tool_result(&mut self, _call_id: &str, content: &str) {
+            self.feedback.push(content.to_string());
+        }
+    }
+
+    fn repo_scoped_manifest() -> TaskManifest {
+        TaskManifest {
+            task_id: Uuid::nil(),
+            repo_root: PathBuf::from("/repo"),
+            ttl_seconds: 60,
+            filesystem: FilesystemPolicy {
+                readable_roots: vec![PathBuf::from("/repo")],
+                writable_roots: vec![],
+            },
+            exec: ExecPolicy {
+                allowed_binaries: vec![],
+            },
+            network: NetworkPolicy::DenyAll,
+        }
+    }
+
+    #[test]
+    fn loop_denies_out_of_scope_call_and_feeds_denial_back() {
+        let mut orchestrator =
+            Orchestrator::new(&repo_scoped_manifest(), AuthzMode::Enforced).unwrap();
+
+        // Turn 1: the principal (post-"injection") asks for an out-of-scope read.
+        let mut principal = MockPrincipal {
+            turns: std::collections::VecDeque::from(vec![vec![(
+                ToolCall::FsRead {
+                    path: PathBuf::from("/etc/passwd"),
+                },
+                "call-1".to_string(),
+            )]]),
+            feedback: Vec::new(),
+        };
+
+        let outcomes = orchestrator.run_principal(&mut principal, 8);
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(outcomes[0].decision, StepDecision::Denied(_)));
+        // The denial was fed back to the principal so it could react.
+        assert_eq!(principal.feedback.len(), 1);
+        assert!(
+            principal.feedback[0].contains("DENIED"),
+            "principal should be told it was denied, got: {}",
+            principal.feedback[0]
+        );
+    }
+
+    #[test]
+    fn loop_stops_when_principal_emits_no_calls() {
+        let mut orchestrator =
+            Orchestrator::new(&repo_scoped_manifest(), AuthzMode::Enforced).unwrap();
+        let mut principal = MockPrincipal {
+            turns: std::collections::VecDeque::new(),
+            feedback: Vec::new(),
+        };
+        let outcomes = orchestrator.run_principal(&mut principal, 8);
+        assert!(outcomes.is_empty());
+        assert!(principal.feedback.is_empty());
+    }
 
     #[test]
     fn parse_fs_read_valid() {
