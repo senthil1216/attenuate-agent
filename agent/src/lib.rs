@@ -417,24 +417,39 @@ fn parse_raw_tool_call(func: &RawFunctionCall) -> Option<ToolCall> {
     match func.name.as_str() {
         "fs_read" => {
             let path = args.get("path")?.as_str()?.to_string();
-            Some(ToolCall::FsRead { path: PathBuf::from(path) })
+            Some(ToolCall::FsRead {
+                path: PathBuf::from(path),
+            })
         }
         "fs_write" => {
             let path = args.get("path")?.as_str()?.to_string();
             let contents = args.get("contents")?.as_str()?.to_string();
-            Some(ToolCall::FsWrite { path: PathBuf::from(path), contents })
+            Some(ToolCall::FsWrite {
+                path: PathBuf::from(path),
+                contents,
+            })
         }
         "exec" => {
             let binary = args.get("binary")?.as_str()?.to_string();
             let args_arr = args.get("args")?.as_array()?;
-            let args_vec: Vec<String> = args_arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-            Some(ToolCall::Exec { binary, args: args_vec })
+            let args_vec: Vec<String> = args_arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            Some(ToolCall::Exec {
+                binary,
+                args: args_vec,
+            })
         }
         "network" => {
             let host = args.get("host")?.as_str()?.to_string();
             let port = args.get("port")?.as_u64()? as u16;
             let payload = args.get("payload")?.as_str()?.to_string();
-            Some(ToolCall::Network { host, port, payload })
+            Some(ToolCall::Network {
+                host,
+                port,
+                payload,
+            })
         }
         _ => None,
     }
@@ -493,8 +508,12 @@ impl OpenAiPrincipalClient {
     /// Get the next set of tool calls from the model, using current messages.
     /// Returns (ToolCall, tool_call_id) pairs so results can be fed back.
     pub fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
-        let calls_with_ids =
-            fetch_tool_calls_from_model(&self.base_url, &self.model, self.api_key.as_deref(), self.messages.clone())?;
+        let calls_with_ids = fetch_tool_calls_from_model(
+            &self.base_url,
+            &self.model,
+            self.api_key.as_deref(),
+            self.messages.clone(),
+        )?;
 
         if !calls_with_ids.is_empty() {
             // Append assistant message with the tool calls (for the model's next turn).
