@@ -43,13 +43,13 @@ fn main() -> Result<()> {
                         format!("read {} bytes", content.len())
                     }
                     warden_tools::ToolOutput::Write { bytes_written } => {
-                        format!("wrote {} bytes", bytes_written)
+                        format!("wrote {bytes_written} bytes")
                     }
                     warden_tools::ToolOutput::Exec { status, .. } => {
-                        format!("exec status={:?}", status)
+                        format!("exec status={status:?}")
                     }
                     warden_tools::ToolOutput::Network { bytes_sent } => {
-                        format!("sent {} bytes", bytes_sent)
+                        format!("sent {bytes_sent} bytes")
                     }
                 };
                 ("ALLOW", short)

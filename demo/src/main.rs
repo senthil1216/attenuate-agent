@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         "listener" | "sink" => run_listener(&args[2..]),
         "contrast" | "run-contrast" => run_contrast(),
         other => {
-            eprintln!("unknown subcommand: {}", other);
+            eprintln!("unknown subcommand: {other}");
             print_usage(&args[0]);
             std::process::exit(2);
         }
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 }
 
 fn print_usage(prog: &str) {
-    eprintln!("usage: {} <subcommand> [args...]", prog);
+    eprintln!("usage: {prog} <subcommand> [args...]");
     eprintln!("  setup");
     eprintln!("  listener [--port 9999] [--log /tmp/sink.log]");
     eprintln!("  contrast");
@@ -124,17 +124,17 @@ fn run_listener(args: &[String]) -> Result<()> {
     let _ = fs::remove_file(&log_path);
 
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    println!("Canary sink listening on 127.0.0.1:{} → {}", port, log_path);
+    println!("Canary sink listening on 127.0.0.1:{port} → {log_path}");
     println!("(The injected principal will try to POST the secret here.)");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 if let Err(e) = handle_connection(stream, &log_path) {
-                    eprintln!("connection error: {}", e);
+                    eprintln!("connection error: {e}");
                 }
             }
-            Err(e) => eprintln!("accept error: {}", e),
+            Err(e) => eprintln!("accept error: {e}"),
         }
     }
 
@@ -185,7 +185,7 @@ fn run_contrast() -> Result<()> {
     let log_for_listener = log_path.clone();
     let listener_handle = thread::spawn(move || {
         if let Err(e) = run_internal_listener(9999, &log_for_listener) {
-            eprintln!("internal listener error: {}", e);
+            eprintln!("internal listener error: {e}");
         }
     });
 
@@ -210,7 +210,7 @@ fn run_contrast() -> Result<()> {
         .env("AUTHZ", "on")
         .output()?;
     let clean_stdout = String::from_utf8_lossy(&clean_out.stdout).to_string();
-    print!("{}", clean_stdout);
+    print!("{clean_stdout}");
     if !clean_out.stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&clean_out.stderr));
     }
@@ -227,7 +227,7 @@ fn run_contrast() -> Result<()> {
         .env("AUTHZ", "off")
         .output()?;
     let vuln_stdout = String::from_utf8_lossy(&vuln_out.stdout).to_string();
-    print!("{}", vuln_stdout);
+    print!("{vuln_stdout}");
     if !vuln_out.stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&vuln_out.stderr));
     }
@@ -244,7 +244,7 @@ fn run_contrast() -> Result<()> {
         .env("AUTHZ", "on")
         .output()?;
     let prot_stdout = String::from_utf8_lossy(&prot_out.stdout).to_string();
-    print!("{}", prot_stdout);
+    print!("{prot_stdout}");
     if !prot_out.stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&prot_out.stderr));
     }
