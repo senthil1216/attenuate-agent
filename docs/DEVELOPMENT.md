@@ -26,6 +26,36 @@ git config --global commit.gpgsign true
 
 Add the matching public SSH key to GitHub under **Settings > SSH and GPG keys > New SSH signing key**. GitHub web commits and squash merges are signed by GitHub.
 
+## Repository rulesets
+
+Protections for the `main` branch (and future additional rules for tags or other branches) are defined as **repository rulesets** and stored in source control.
+
+- Rule definitions: `.github/rulesets/main.json` (and additional `*.json` files as needed)
+- Apply / sync script: `.github/scripts/apply-rulesets.sh`
+
+To update rules after editing a JSON definition:
+
+```sh
+./.github/scripts/apply-rulesets.sh
+```
+
+The "main" ruleset currently enforces (matching and extending the previous branch protection intent):
+
+- Require signed commits (`required_signatures`)
+- Require linear history (no merge commits; forces squash or rebase merges)
+- Require a pull request before merging to `main`
+- Allowed merge methods on PRs: squash, rebase (no direct merge commits)
+- Require all conversations on the PR to be resolved before merge
+- Require status checks to pass (the "Rust" job from CI, with strict "up-to-date" policy)
+- Block force pushes (`non_fast_forward`)
+- Block deletions of the protected ref
+
+Bypass is not granted to admins by default (enforced for everyone).
+
+**Live configuration:** https://github.com/senthil1216/attenuate-agent/settings/rules
+
+**Note:** Classic branch protection is not used; rulesets are the source of truth for these policies.
+
 ## Current implementation milestone
 
 The repository is scaffolded as a Rust workspace with crate boundaries matching the design in `README.md`.
