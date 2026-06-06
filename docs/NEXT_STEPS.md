@@ -2,7 +2,12 @@
 
 **Project:** Warden — a capability-based authorization framework for tool calls.
 **Repo:** <https://github.com/senthil1216/attenuate-agent>
-**Status:** Core capability, PEP/PDP, tools dispatch, and the trusted `Orchestrator` (with `AUTHZ=on|off`, per-call attenuation, request binding, and hash-chained audit) are implemented and tested. The reference application scaffolding has been replaced by real logic + acceptance tests that demonstrate the structural guarantee. The next blocking milestone is turning this into a user-facing, reproducible **showcase demo harness** (P3) with on-disk fixtures, injection notes, canary listener, and nice artifacts.
+
+**Fate of this document:** This is the **detailed living working document** for next steps, planning, and tracking progress against the original phased plan. High-level phase status and summary live in the root `README.md` (see "Status" and "Quick Demo" sections). Do not delete this file; update it after each milestone.
+
+**Status:** P3 demo harness complete & verified (via `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). The demo crate now hosts the M3 fixture/harness (see `demo/README.md`). Engine (P0-P2) solid with acceptance tests. Next: P5 docs + article prep (threat model, recording, trace diff). An AUTHZ=off|on asciinema target is available via `make demo-asciinema` (records the capability-layer contrast before any LLM is wired — de-risks M3 narrative early).
+
+See root `README.md` for high-level phase plan summary.
 
 ## Current Position
 
@@ -93,7 +98,7 @@ Done when: the same tool trace can be run through vulnerable and protected paths
 
 ## P3: Build The Showcase Demo
 
-**Status: Started — fixture skeleton + example traces in place.**
+**Status: Complete & verified** (via your `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). The `demo` crate is now the home for the M3 fixture/harness (see `demo/README.md`).
 
 Goal: create the public artifact: a short, reproducible attack/protected contrast.
 
