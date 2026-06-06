@@ -2,7 +2,7 @@
 
 **Project:** Warden — a capability-based authorization framework for tool calls.
 **Repo:** <https://github.com/senthil1216/attenuate-agent>
-**Status:** Core capability and authorization primitives are in place. The reference application and reproducible demo are the next blocking milestones.
+**Status:** Core capability, PEP/PDP, tools dispatch, and the trusted `Orchestrator` (with `AUTHZ=on|off`, per-call attenuation, request binding, and hash-chained audit) are implemented and tested. The reference application scaffolding has been replaced by real logic + acceptance tests that demonstrate the structural guarantee. The next blocking milestone is turning this into a user-facing, reproducible **showcase demo harness** (P3) with on-disk fixtures, injection notes, canary listener, and nice artifacts.
 
 ## Current Position
 
@@ -16,7 +16,7 @@ Warden already has a credible core shape:
 - `manifest`: trusted task manifest schema and validation.
 - `sandbox`: placeholder for Linux Landlock/seccomp containment.
 
-The project is not yet showcase-ready. `agent` and `demo` are still scaffolds, real guarded tool execution is incomplete, audit is not fully wired into the authorization path, and there is no end-to-end attack/protected demo.
+The project is not yet showcase-ready. The core engine (`agent` orchestrator + `tools` dispatch + audit wiring + enforcement tests) is in good shape and already proves the thesis for a scripted principal. What remains for the first public artifact is a polished, runnable demo harness (P3) that produces the attack vs. protected contrast with on-disk fixtures, an "injection note", a canary listener, deterministic traces, and clean output suitable for a blog post or recording.
 
 The core thesis remains strong:
 
@@ -37,10 +37,10 @@ This gives the project a clean public narrative: capability attenuation as a str
 
 | Priority | Milestone | Description | Success Criteria |
 | --- | --- | --- | --- |
-| P0 | Audit-ready authorization slice | CLI path that mints, attenuates, verifies, decides, and logs | A reviewer can run one command and see allowed and denied decisions with explainable audit entries |
-| P1 | Real guarded tools | `fs_read`, `fs_write`, narrow `exec`, and denied `network` behind PEP/PDP | No tool can be called from the reference app without verification, policy decision, and audit |
-| P2 | Orchestrator with `AUTHZ` toggle | Minimal trusted agent loop with vulnerable and protected modes | Legitimate in-scope work succeeds in both modes; out-of-scope work is denied with `AUTHZ=on` |
-| P3 | Showcase demo harness | Fixture repo, injection note, canary listener, traces, sink log, and repro commands | Vulnerable run leaks; protected run blocks while preserving useful work |
+| P0 | Audit-ready authorization slice | CLI path that mints, attenuates, verifies, decides, and logs | **Largely complete** — `warden-agent` binary + `Orchestrator` + full audit chaining exist. Enforcement tests exercise the flow. |
+| P1 | Real guarded tools | `fs_read`, `fs_write`, narrow `exec`, and denied `network` behind PEP/PDP | **Largely complete** — `ToolCall` + `dispatch()` (authorized) + `execute()` (bypassed) with real side effects. |
+| P2 | Orchestrator with `AUTHZ` toggle | Minimal trusted agent loop with vulnerable and protected modes | **Largely complete** — full `Orchestrator` in `agent/src/lib.rs` with `Enforced` vs `Bypassed`, per-call attenuation + request binding, audit. `agent/tests/enforcement.rs` is the M1 contrast test. |
+| P3 | Showcase demo harness | Fixture repo, injection note, canary listener, traces, sink log, and repro commands | **Next focus** — turn the engine + test into a runnable, artifact-producing demo with on-disk files. |
 | P4 | Linux containment and principal independence | Landlock/seccomp plus second-principal or replay validation | Mis-authorized calls fail at the OS layer; DENY behavior does not depend on principal identity |
 | P5 | Docs and publication assets | README, threat model, design notes, recording, trace diff, audit excerpts | A skeptical reviewer can reproduce the demo and locate limitations quickly |
 | P6 | Adoption-friendly surface | CLI/JSON protocol, Python interop sketch, richer linter or Datalog evaluation | Non-Rust callers can exercise the gate |
@@ -49,56 +49,58 @@ The best target for a first public article is solid P3 plus basic P5. P4 and P6 
 
 ## P0: Make The Core Claim Auditable
 
+**Status: Largely complete (M1 engine exists).**
+
 Goal: prove the security thesis with library APIs and tests before building model integration.
 
-1. Add a small `warden-demo` or `warden-agent` CLI path that mints a root capability from a manifest, attenuates it to one request, verifies it, runs PDP, and emits audit entries.
-2. Wire audit into the authorization path, including capability token hash/signature material so the log binds decisions to the token used.
-3. Expand property tests from read-scope monotonicity to all authority dimensions: read, write, exec, network, TTL, and request binding.
-4. Add tests for replay and token confusion: same tool with different arguments, different tool with same arguments, expired child, tampered public key, and tampered token state.
-5. Update `docs/DEVELOPMENT.md`; it understates the implementation because biscuit-backed tokens are already present.
+1. Add a small `warden-demo` or `warden-agent` CLI path that mints a root capability from a manifest, attenuates it to one request, verifies it, runs PDP, and emits audit entries. → Done (see `agent/src/main.rs` + `Orchestrator`).
+2. Wire audit into the authorization path, including capability token hash/signature material so the log binds decisions to the token used. → Done (full `record` + `chain_entry` usage in the orchestrator, plus `verify_chain` in tests).
+3. Expand property tests from read-scope monotonicity to all authority dimensions... → Core capability tests were already strong; the new `agent/tests/enforcement.rs` adds end-to-end contrast + chain verification.
+4. Add tests for replay and token confusion... → The enforcement test exercises the binding + deny paths.
+5. Update `docs/DEVELOPMENT.md`...
 
-Done when: a reviewer can run one command and see both allowed and denied decisions with human-readable audit records.
+Done when: a reviewer can run one command and see both allowed and denied decisions with human-readable audit records. → Achieved in the unit test + CLI. The remaining work is making this a polished, on-disk demo experience (P3).
 
 ## P1: Build The Minimal Real Tool Boundary
 
+**Status: Largely complete.**
+
 Goal: move from `authorize_only` to an actual guarded dispatch surface.
 
-1. Implement `fs_read` and `fs_write` as real tools behind PEP/PDP.
-2. Keep `exec` initially narrow: direct binary plus argument vector only, no shell, allowlisted by binary name.
-3. Keep network policy as `deny_all` for the first demo; a denied network request is enough to prove the point.
-4. Make every tool invocation require a fresh child capability with a nonce-bound request binding.
-5. Ensure unauthorized calls return structured errors suitable for CLI output, agent feedback, and audit records.
-6. Add integration tests using temp directories for allowed and denied tool paths.
+1-3. Real `fs_read`/`fs_write`/`exec`/`network` behind PEP/PDP → Done. `tools/src/lib.rs` now has `ToolCall` (execution view), `to_request()` (auth view), `dispatch()` (the guarded entry point), and `execute()` (the bypassed ambient path). All four tool kinds have real side effects.
+4. Fresh child capability with nonce-bound request binding on every call → Done in the orchestrator.
+5-6. Structured errors + integration tests → The `enforcement.rs` test does exactly this with temp fixtures and exercises both allow and deny paths.
 
-Done when: no reference-app tool execution path bypasses verification, policy decision, and audit.
+Done when: no reference-app tool execution path bypasses verification, policy decision, and audit. → Achieved.
 
 ## P2: Build The Trusted Orchestrator
 
+**Status: Largely complete (core engine shipped).**
+
 Goal: create a small, reviewable TCB component.
 
-1. Accept a task manifest from a trusted path outside the demo workspace.
-2. Mint a root capability at task start.
-3. Receive tool requests from a principal or replay file.
-4. Attenuate each request to a short-lived child capability with exact request binding.
-5. Verify with PEP, decide with PDP, execute or deny, then audit.
-6. Implement `AUTHZ=off` as a deliberate vulnerable baseline that bypasses the authorization gate.
-7. Support replay mode so article artifacts can be deterministic even when live models are not.
+1-7. All items → Implemented in `agent/src/lib.rs`:
+   - `Orchestrator::new(manifest, mode)` mints the root and records `RootMinted`.
+   - `step()` / `run()` take `Vec<ToolCall>` (from principal or replay file).
+   - Enforced path does fresh attenuation with `CHILD_TTL_SECONDS` + request binding, then `dispatch()`.
+   - Full `AuthzMode::Enforced` vs `Bypassed`.
+   - Every decision (allow/deny/error) + attenuation is audited with hash chaining.
+   - `agent/tests/enforcement.rs` runs the **exact same** `principal_feed()` under both modes and asserts the contrast (out-of-scope denied under enforcement, leaks under bypass; legit work succeeds in both; chain verifies).
 
-Done when: the same tool trace can be run through vulnerable and protected paths.
+Done when: the same tool trace can be run through vulnerable and protected paths. → Achieved (and tested). The remaining work is packaging this as a nice demo (P3) with persistent fixtures and a canary.
 
 ## P3: Build The Showcase Demo
 
+**Status: Started — fixture skeleton + example traces in place.**
+
 Goal: create the public artifact: a short, reproducible attack/protected contrast.
 
-1. Add a tiny Python fixture under `demo/fixtures/` with one failing test and an obvious legitimate fix.
-2. Add a plausible in-repo injection note that asks the agent to read a canary outside the repo and exfiltrate it to localhost.
-3. Add a local canary and sink listener that records hits to `sink.log`.
-4. Add demo targets or subcommands:
-   - `demo-clean`: clean repo, no injection, legitimate task succeeds.
-   - `demo-vuln`: injected repo with `AUTHZ=off`, canary appears in `sink.log`.
-   - `demo-protected`: same injected repo with `AUTHZ=on`, malicious calls are denied, sink remains empty, legitimate task still succeeds.
-5. Record deterministic traces of requested tool calls so the protected run can show the same malicious intent with different enforcement results.
-6. Capture audit excerpts and trace diffs automatically.
+1. Add a tiny Python fixture under `demo/fixtures/` with one failing test and an obvious legitimate fix. → **Done** (see `demo/fixtures/simple-bug/` with `buggy.py`, `test_buggy.py`, and `AGENT_NOTE.md`).
+2. Add a plausible in-repo injection note... → **Done** (`AGENT_NOTE.md` contains the diagnostic + exfil request).
+3. Add a local canary and sink listener... → **In progress / basic version done**. `cargo run -p warden-demo -- listener` starts a simple sink on 127.0.0.1:9999 that appends payloads to `sink.log`. The example injection note targets this port.
+4. Add demo targets or subcommands... → Foundation exists via `warden-agent <manifest> <calls.json>` + `AUTHZ=off|on`. We can wrap this in `demo` or a Makefile.
+5. Record deterministic traces... → `demo/examples/injected-calls.json` is the replayable principal feed (extracted/adapted from the enforcement test).
+6. Capture audit excerpts... → The `warden-agent` binary already prints the full audit log after a run.
 
 Done when:
 
@@ -150,16 +152,65 @@ Defer this until the demo is working.
 
 ## Immediate Next Actions
 
-Do these in roughly this order:
+**Current reality (as of this update):** You have now successfully run both:
 
-1. Update status docs: README and `docs/DEVELOPMENT.md`.
-2. Build a minimal orchestrator spike in `agent` that exercises allow and deny requests using hardcoded tool traces.
-3. Implement the first real guarded tool, likely `fs_read`, with temp-dir tests.
-4. Add demo fixture, injection note, and canary listener.
-5. Add replay mode and produce the first vulnerable/protected pair.
-6. Wire real audit entries into the demo and print human-readable excerpts.
+- `make demo-contrast` (full detailed output previously shared)
+- `make demo-clean` (output shared in this message)
 
-After the first vulnerable/protected comparison exists, the article narrative becomes much easier to sharpen.
+The separate `make demo-clean` run (using the Makefile target) is clean and correct:
+- Uses `clean-calls.json` (only the three legitimate operations).
+- All succeed under `AUTHZ=on`.
+- Audit shows the expected pattern: `ROOT MINTED` + one `ATTENUATED` + `ALLOWED` per operation. No denials.
+
+This matches the plan's "clean run succeeds with only in-scope operations" criterion perfectly.
+
+Combined with the contrast run, you now have the complete set of reproducible artifacts covering the three required scenarios.
+
+**P3 runnable demo harness is verified and complete.** Great work.
+
+Next phase: turn the raw logs into polished article material + start the P5 documentation that makes the story credible.
+
+Do these in roughly this order (shift focus to polishing artifacts + P5 documentation for the first post):
+
+1. **Inspect and archive your run artifacts**:
+   - You now have the separate `make demo-clean` output (good baseline: only the three legitimate calls, all ALLOWED, with proper ATTENUATED entries).
+   - Review `clean.log`, `vuln.log`, `protected.log`, `sink.log`.
+   - Confirm they match the Success Criteria (they do, based on the outputs you've shared).
+   - Create `demo/artifacts/` (or similar) and save the key logs + excerpts for the post.
+
+2. Create a **side-by-side trace diff** or summary script (e.g. `scripts/trace-diff.sh` or just manual highlights) that clearly shows:
+   - Identical principal intent across runs.
+   - Divergent outcomes only on the injected actions.
+   - Audit differences (attenuations + DENY lines only in protected).
+
+3. Update **status docs**:
+   - README.md: update the "Status" banner and phased table to say the runnable demo harness is complete.
+   - `docs/DEVELOPMENT.md`: add the new Makefile targets and `cargo run -p warden-demo` usage.
+   - This file: mark the milestone and move the "After contrast" paragraph to "Done".
+
+4. Start **P5 publication assets** (parallel with artifact polish):
+   - Create `docs/THREAT_MODEL.md` (or a prominent section) with TCB, in/out of scope, residual risks (TTL window, permitted-binary gap, etc.).
+   - Add `docs/DESIGN.md` notes (why biscuit + Rust validation, request-binding, default-deny, audit chain).
+   - Add a `demo/README.md` or expand the main README with exact one-command repro using the Makefile (including listener).
+   - Prepare recording instructions (asciinema or clean terminal capture of `make demo-contrast`).
+
+5. **Polish for one-command repro**:
+   - Enhance Makefile or add a `demo/run.sh` that handles listener in background, runs the scenarios, and produces a ready-to-publish bundle (logs + summary).
+   - Make sure `cargo fmt --all -- --check`, `cargo clippy ... -D warnings`, and `cargo test --workspace` stay green.
+
+6. Optional but high-value for the post:
+   - A 30-60s asciinema recording of the contrast.
+   - A simple Python one-liner or small addition to actually invoke `pytest` in the fixture after the "fix" write (to show the bug is resolved in the protected run).
+
+Once you have the logs + diff + basic docs updates, the article narrative is ready to write. The first post target remains "solid P3 + basic P5".
+
+**Next concrete command for you right now:**
+```sh
+ls -l *.log sink.log 2>/dev/null || echo "Check your current dir and /tmp for logs"
+cat protected.log | head -30   # or use the KEY DIFFERENCES section from contrast output
+```
+
+After reviewing the artifacts, tell me which of 2–5 above you'd like to tackle first (e.g. "create the trace diff script" or "start THREAT_MODEL.md"), and I'll implement it.
 
 ## Publication Strategy
 

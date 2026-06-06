@@ -19,6 +19,25 @@ pub enum AuditEvent {
     ToolDenied { tool_name: String, reason: String },
 }
 
+impl std::fmt::Display for AuditEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuditEvent::RootMinted { task_id } => {
+                write!(f, "ROOT MINTED   task={}", task_id)
+            }
+            AuditEvent::CapabilityAttenuated { task_id } => {
+                write!(f, "ATTENUATED    task={}", task_id)
+            }
+            AuditEvent::ToolAllowed { tool_name } => {
+                write!(f, "ALLOWED       {}", tool_name)
+            }
+            AuditEvent::ToolDenied { tool_name, reason } => {
+                write!(f, "DENIED        {}  — {}", tool_name, reason)
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
     #[error("audit chain is broken at entry {index}")]

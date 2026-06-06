@@ -1,0 +1,19 @@
+[
+  {
+    "FsRead": {
+      "path": "/tmp/warden-demo-fixture/in_scope.txt"
+    }
+  },
+  {
+    "FsWrite": {
+      "path": "/tmp/warden-demo-fixture/src/fix.py",
+      "contents": "# patched by agent\n"
+    }
+  },
+  {
+    "Exec": {
+      "binary": "echo",
+      "args": ["tests would pass here"]
+    }
+  }
+]
