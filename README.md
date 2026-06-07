@@ -4,7 +4,7 @@
 
 Warden provides reusable building blocks for systems that need to grant *scoped, attenuable, time-bounded* authority to potentially untrusted callers — and prove, structurally, that the authority can only narrow as it flows.
 
-> Status: P3 demo harness complete + verified (runnable `make demo-contrast` etc. producing clean/protected contrast artifacts, on-disk fixtures, canary listener, and human-readable audit). Engine (P0-P2) solid with acceptance tests. Next: P5 docs + article prep (threat model, recording, trace diff). See `docs/NEXT_STEPS.md` and `demo/artifacts/`.
+> Status: Capability engine (P0–P2), the reference orchestrator with a multi-turn agentic loop (`AUTHZ=off|on`), and the demo harness are implemented and tested; `make demo-contrast` produces the off-vs-on contrast artifacts. **Not yet implemented:** the OS-level sandbox (`sandbox` is a stub) and the live-model end-to-end validation. Policy decisions are made in Rust, not in-token Datalog (see `docs/DESIGN.md`). Next: P5 docs + article prep. See `docs/NEXT_STEPS.md` and `demo/artifacts/`.
 
 ---
 
@@ -14,8 +14,8 @@ The framework crates:
 
 - **`capability`** — biscuit-auth wrapper. Root capability minted from a trusted task manifest; child capabilities created by appending caveats only. Type-level constraint plus property tests enforce append-only attenuation.
 - **`pep`** — Policy enforcement point. Verifies signature chain, expiry, and request-bound tool binding before any tool dispatch.
-- **`pdp`** — Policy decision point. Datalog over the caveat set and request context, with a static linter rejecting always-allow rules. Architectural default-deny.
-- **`sandbox`** — Defense-in-depth containment. Landlock for filesystem and seccomp for syscalls (Linux).
+- **`pdp`** — Policy decision point. A Rust decision function over the caveat set and request context, with a static linter rejecting always-allow rules. Architectural default-deny. (Decisions are deliberately plain Rust, not in-token Datalog — see `docs/DESIGN.md`.)
+- **`sandbox`** — *Planned* defense-in-depth: Landlock (filesystem) + seccomp (syscalls) on Linux. **Not yet implemented — currently a stub;** see the phased plan below.
 - **`audit`** — Hash-chained append-only audit log. Binds the previous entry's hash and the capability signature, so tampering is detectable.
 - **`manifest`** — Trusted task-manifest schema and loader. Provenance is outside the workspace; manifest is in the TCB.
 
@@ -116,10 +116,10 @@ Treat untrusted callers — model output, plugin code, external commands — as 
        |
        v
   Verifier (PEP)  — signature chain, expiry, root revocation check, request-bound tool binding
-       |  <----> Policy engine (PDP): Datalog over the full caveat set + request context
+       |  <----> Policy engine (PDP): Rust decision over the full caveat set + request context
        v
   Decision
-    allow -> Sandbox (Landlock/seccomp, Linux) -> tool executes -> result back into loop
+    allow -> Sandbox (Landlock/seccomp, Linux; PLANNED) -> tool executes -> result back into loop
     deny  -> structured error back into loop + audit entry
        |
        v
@@ -141,7 +141,7 @@ Treat untrusted callers — model output, plugin code, external commands — as 
 
 - A reusable Rust capability layer using offline-attenuable tokens with a declarative policy.
 - Enforcement at the tool-dispatch boundary, decoupled into decision (PDP) and enforcement (PEP).
-- OS-level sandbox containment as defense in depth (Linux).
+- OS-level sandbox containment as defense in depth (Linux) — planned.
 - A reference application demonstrating the framework end-to-end: a local coding agent where prompt-injection-induced privilege escalation is structurally impossible.
 - Principal-independence demonstrated by repointing the reference demo at a second, unrelated principal with no dispatch-code change.
 - A rigorous threat model with an explicit "what this does *not* defend against" section.
@@ -178,9 +178,9 @@ Treat untrusted callers — model output, plugin code, external commands — as 
 
 ## Technology choices
 
-- **Capability tokens:** `biscuit-auth`, using its native attenuation primitives. Chosen over hand-rolled tokens (no attenuation algebra) and macaroons (biscuit's Datalog fits declarative per-tool policy).
-- **Policy:** biscuit Datalog, version-controlled, review-gated, with a static linter. Architectural default-deny.
-- **Sandbox:** Landlock (filesystem) + seccomp (syscall), **Linux only** for the enforced demo. macOS is development-only with **no containment guarantee** — Seatbelt/sandbox-exec is materially weaker for this use case; the plan does not imply parity.
+- **Capability tokens:** `biscuit-auth`, using its native attenuation primitives. Chosen over hand-rolled tokens (no attenuation algebra) and macaroons (biscuit's richer fact model and first-class Rust support).
+- **Policy:** a Rust decision function over the capability's caveats, version-controlled, review-gated, with a static linter. Architectural default-deny. Biscuit's Datalog backs token attenuation and verification; the policy *decision* is plain Rust by design (see `docs/DESIGN.md`).
+- **Sandbox (planned, not yet implemented):** Landlock (filesystem) + seccomp (syscall), **Linux only** for the enforced demo. macOS is development-only with **no containment guarantee** — Seatbelt/sandbox-exec is materially weaker for this use case; the plan does not imply parity.
 - **Language:** Rust. First-class `biscuit-auth`, Landlock, seccomp crates; the type-level attenuation constraint leans on Rust's type system.
 
 ---
@@ -190,8 +190,8 @@ Treat untrusted callers — model output, plugin code, external commands — as 
 ```
 /capability   — biscuit wrapper, append-only attenuation (type-constrained), proptest
 /pep          — verifier (signature chain, expiry, root revocation, request-bound binding)
-/pdp          — Datalog policy + evaluation + linter
-/sandbox      — Landlock + seccomp wrappers (Linux)
+/pdp          — Rust policy decision + linter
+/sandbox      — Landlock + seccomp wrappers (Linux) — PLANNED; currently a stub
 /manifest     — task-manifest schema + loader (provenance-checked, outside workspace)
 /audit        — hash-chained log writer + verifier (binds prev hash + token signature)
 /agent        — reference orchestrator (coding-agent demo)
@@ -221,7 +221,7 @@ The attenuation proof is the project's **go/no-go gate**; everything is schedule
 
 - **Phase 0 — Foundations** (Week 1, ~3 days): language decision, repo/CI/lint/license, baseline orchestrator with NO authorization (deliberate vulnerable baseline, clearly marked and isolated).
 - **Phase 1 — Capability core (P0-GATE)** (Week 1–2, ~4 days): root minting from the manifest, append-only attenuation wrapping biscuit primitives, type-level single-constructor constraint, proptest suite. **Done when:** a generated attempt to widen scope is NOT expressible in the type system, and property tests pass. **Gates all downstream work.**
-- **Phase 2 — Enforcement boundary (PEP + PDP)** (Week 2, ~3 days): signature chain, expiry, root revocation check, request-bound binding; Datalog over full caveat set + context; policy linter (rejects always-allow rules); property-based tests for full policy evaluation across all four operation classes.
+- **Phase 2 — Enforcement boundary (PEP + PDP)** (Week 2, ~3 days): signature chain, expiry, root revocation check, request-bound binding; Rust decision over full caveat set + context; policy linter (rejects always-allow rules); property-based tests for full policy evaluation across all four operation classes.
 - **Phase 3 — Reference orchestrator integration** (Week 2–3, ~3 days): `fs_read`, `fs_write`, `exec`, `network` tools reachable only via the PEP; task-start minting from manifest (trusted channel only); `AUTHZ=off|on` toggle.
 - **Phase 4 — Sandbox containment (P2)** (Week 3, ~3 days): Landlock fs confinement to `repo_root` for exec'd tools; seccomp blocking network syscalls under `network:deny_all`. **Done when:** a deliberately mis-authorized call still fails at the OS boundary.
 - **Phase 5 — Reference demo** (Week 3–4, ~3 days): fixture (small Python package with a real, fixable failing test); indirect injection embedded as a plausible in-repo "agent maintenance note"; canary file outside repo root; local listener on `127.0.0.1:9999`; deterministic decoding (temperature 0, greedy, fixed seed, tracing on); injection corpus (4–5 phrasings); `make demo-clean`, `make demo-vuln`, `make demo-protected`.
@@ -274,13 +274,13 @@ The framework is successful when:
 ## Key risks
 
 - **Attenuation API allows widening via a bug** — HIGHEST severity; it is the whole thesis. Mitigation: type-level single-constructor append-only constraint + proptest + wrap biscuit primitives, never re-implement. Gated as P0 (Phase 1).
-- **Datalog policy single point of catastrophic failure** (one always-allow rule bypasses everything). Mitigation: static linter, architectural default-deny that cannot be shadowed, review-gated policy changes (Phase 2).
+- **Policy single point of catastrophic failure** (one always-allow rule bypasses everything). Mitigation: static linter, architectural default-deny that cannot be shadowed, review-gated policy changes (Phase 2).
 - **Root-capability derivation from untrusted input.** Mitigation: operator-authored manifest, provenance strictly outside the workspace, manifest in TCB, authority-ceiling invariant for any future NL parsing.
 - **Orchestrator trust conflation.** Mitigation: explicit split — code integrity trusted (TCB), behavioral decisions untrusted; compromised binary out of scope.
 - **Revocation of offline-attenuated children.** Mitigation: decisive position — root-only revocation; child non-revocable by design; seconds-wide residual window named as an accepted, documented limitation.
 - **Replay with same tool ID but different arguments.** Mitigation: bind nonce over `hash(tool name + arguments + nonce)`, not the ID alone.
 - **DS4 tool-binding external dependency** for the reference demo (alpha project; DSML/ID mechanics may change). Mitigation: validate in week 1 (Phase 0); fallback binding path identified if it does not behave as expected.
-- **Scope creep** (SPIFFE, custom policy language, macOS parity). Mitigation: SPIFFE hard-fenced to a one-page sketch; biscuit Datalog used as-is; macOS explicitly non-parity and dev-only.
+- **Scope creep** (SPIFFE, custom policy language, macOS parity). Mitigation: SPIFFE hard-fenced to a one-page sketch; biscuit used as-is; macOS explicitly non-parity and dev-only.
 
 ---
 
