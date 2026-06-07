@@ -63,7 +63,9 @@ fn main() -> Result<()> {
         eprintln!("M3 live: querying principal at {base_url} model={model}\n");
         let mut principal =
             warden_agent::OpenAiPrincipalClient::new(base_url, model, api_key, messages);
-        orchestrator.run_principal(&mut principal, DEFAULT_MAX_TURNS)
+        orchestrator
+            .run_principal(&mut principal, DEFAULT_MAX_TURNS)
+            .context("live principal loop failed")?
     } else {
         usage(&args[0]);
     };

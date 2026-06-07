@@ -74,6 +74,11 @@ pub enum StepDecision {
 /// guard for live principals that never stop requesting tools.
 pub const DEFAULT_MAX_TURNS: usize = 16;
 
+/// How many consecutive all-unparseable model turns the live client retries
+/// (feeding the parse errors back so the model can correct itself) before
+/// giving up and ending the loop.
+const MAX_UNPARSEABLE_RETRIES: usize = 3;
+
 /// An untrusted source of tool calls: a live model, a scripted replay, or a
 /// test mock. The orchestrator drives a `Principal` without trusting it — every
 /// call it returns is authorized before execution, and every result (including
@@ -100,6 +105,13 @@ impl ScriptedPrincipal {
         Self {
             pending: calls.into(),
         }
+    }
+
+    /// Turns needed to replay every call (one per turn) plus the final empty
+    /// turn that ends the loop. Keeps `run()`'s turn budget out of the public
+    /// API and off the one-call-per-turn implementation detail.
+    pub fn turn_budget(&self) -> usize {
+        self.pending.len() + 1
     }
 }
 
@@ -173,32 +185,29 @@ impl Orchestrator {
     /// Run a fixed, pre-decided sequence of tool calls (scripted / replay path).
     /// Routes through the same agentic loop a live model uses.
     pub fn run(&mut self, calls: Vec<ToolCall>) -> Vec<StepOutcome> {
-        // ScriptedPrincipal yields one call per turn, so we need one turn per
-        // call plus a final turn that returns empty and ends the loop: len()+1.
-        let max_turns = calls.len() + 1;
         let mut scripted = ScriptedPrincipal::new(calls);
-        self.run_principal(&mut scripted, max_turns)
+        let budget = scripted.turn_budget();
+        // ScriptedPrincipal cannot error, so the Result is infallible here.
+        self.run_principal(&mut scripted, budget)
+            .expect("ScriptedPrincipal is infallible")
     }
 
     /// Drive a principal to completion: each turn ask it for tool calls, enforce
     /// each one, and feed the result (or the denial) back so the principal can
     /// react. This is the agentic loop that lets a live model be genuinely
     /// prompt-injected and then structurally contained.
+    ///
+    /// A principal error (transport / JSON / model failure) is propagated to the
+    /// caller rather than swallowed, so a live run can distinguish failure from
+    /// clean termination.
     pub fn run_principal<P: Principal>(
         &mut self,
         principal: &mut P,
         max_turns: usize,
-    ) -> Vec<StepOutcome> {
+    ) -> Result<Vec<StepOutcome>> {
         let mut outcomes = Vec::new();
         for _turn in 0..max_turns {
-            let calls = match principal.next_tool_calls() {
-                Ok(calls) => calls,
-                // A principal error (transport/JSON/model failure) terminates the
-                // loop and returns the outcomes accumulated so far — no side
-                // effect in library code. A Principal that wants to surface the
-                // error should do so within its own next_tool_calls.
-                Err(_error) => break,
-            };
+            let calls = principal.next_tool_calls()?;
             if calls.is_empty() {
                 break;
             }
@@ -208,7 +217,7 @@ impl Orchestrator {
                 outcomes.push(outcome);
             }
         }
-        outcomes
+        Ok(outcomes)
     }
 
     pub fn step(&mut self, call: ToolCall) -> StepOutcome {
@@ -673,13 +682,29 @@ impl Principal for OpenAiPrincipalClient {
     /// (faithful arguments + ids) so the replayed conversation reflects exactly
     /// what the model asked for — required for correct multi-turn behaviour.
     fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
-        let assistant = post_chat(
-            &self.base_url,
-            &self.model,
-            self.api_key.as_deref(),
-            &self.messages,
-        )?;
-        Ok(self.ingest_assistant(assistant))
+        // Retry across all-unparseable turns: if the model emitted tool calls but
+        // none were parseable, the error results are now in the conversation, so
+        // re-query and let the model correct itself. Terminate only when the
+        // model produces executable calls, emits no tool calls at all (genuinely
+        // done), or the retry budget is exhausted — never confuse "done" with
+        // "this turn was all garbage".
+        for _ in 0..MAX_UNPARSEABLE_RETRIES {
+            let assistant = post_chat(
+                &self.base_url,
+                &self.model,
+                self.api_key.as_deref(),
+                &self.messages,
+            )?;
+            let emitted_tool_calls = !assistant.tool_calls.is_empty();
+            let calls = self.ingest_assistant(assistant);
+            if !calls.is_empty() {
+                return Ok(calls);
+            }
+            if !emitted_tool_calls {
+                return Ok(Vec::new());
+            }
+        }
+        Ok(Vec::new())
     }
 
     /// Feed a tool execution result back into the conversation for the next turn.
@@ -714,6 +739,27 @@ mod tests {
         }
     }
 
+    /// Always fails — used to assert principal errors propagate, not vanish.
+    struct ErroringPrincipal;
+    impl Principal for ErroringPrincipal {
+        fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
+            Err(anyhow::anyhow!("simulated transport failure"))
+        }
+        fn add_tool_result(&mut self, _call_id: &str, _content: &str) {}
+    }
+
+    #[test]
+    fn loop_surfaces_principal_error() {
+        let mut orchestrator =
+            Orchestrator::new(&repo_scoped_manifest(), AuthzMode::Enforced).unwrap();
+        let mut principal = ErroringPrincipal;
+        let result = orchestrator.run_principal(&mut principal, 8);
+        assert!(
+            result.is_err(),
+            "a principal error must propagate to the caller, not be swallowed"
+        );
+    }
+
     fn repo_scoped_manifest() -> TaskManifest {
         TaskManifest {
             task_id: Uuid::nil(),
@@ -746,7 +792,7 @@ mod tests {
             feedback: Vec::new(),
         };
 
-        let outcomes = orchestrator.run_principal(&mut principal, 8);
+        let outcomes = orchestrator.run_principal(&mut principal, 8).unwrap();
 
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(outcomes[0].decision, StepDecision::Denied(_)));
@@ -818,7 +864,7 @@ mod tests {
             turns: std::collections::VecDeque::new(),
             feedback: Vec::new(),
         };
-        let outcomes = orchestrator.run_principal(&mut principal, 8);
+        let outcomes = orchestrator.run_principal(&mut principal, 8).unwrap();
         assert!(outcomes.is_empty());
         assert!(principal.feedback.is_empty());
     }
