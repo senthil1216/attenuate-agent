@@ -61,7 +61,7 @@ Warden is an *authorization architecture* defense. It is complementary to (and d
 
 - Prompt hardening / input sanitization
 - Model refusal training
-- Sandboxing at the OS level (Landlock + seccomp is defense-in-depth when enabled)
+- Sandboxing at the OS level (Landlock + seccomp — planned defense-in-depth, not yet implemented)
 - Code review of permitted binaries
 - Supply-chain security for the runtime itself
 
