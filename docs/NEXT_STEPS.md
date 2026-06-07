@@ -7,6 +7,10 @@
 
 **Status:** P3 demo harness complete & verified (via `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). The demo crate now hosts the M3 fixture/harness (see `demo/README.md`). Engine (P0-P2) solid with acceptance tests. Next: P5 docs + article prep (threat model, recording, trace diff). An AUTHZ=off|on asciinema target is available via `make demo-asciinema` (records the capability-layer contrast before any LLM is wired — de-risks M3 narrative early).
 
+**Latest (Tier 1 / P3.5 — live principal):** the **multi-turn agentic loop is implemented**. A `Principal` trait abstracts the source of tool calls; `Orchestrator::run_principal` drives it (emit → enforce → feed result/denial back → react); `ScriptedPrincipal` keeps the scripted demo/tests model-free; `OpenAiPrincipalClient` records each model turn verbatim (replay-faithful) for real multi-turn use; `make demo-contrast-live` / `cargo run -p warden-demo -- contrast --live` run the contrast against a real model. This lets a live model read the injected `AGENT_NOTE.md` and *then* attempt the out-of-scope action, only to be structurally denied. **Gated on Spike A** (determinism) for a clean off/on control — see "M0 de-risk spikes" below.
+
+**M0 de-risk spikes** (under `spikes/`, excluded from the workspace; run on your hardware): `ds4-determinism` validates byte-identical tool calls at temp 0 + seed (gates the live off/on control), and `landlock-docker` validates that Landlock/seccomp actually deny inside a container (gates P4). These are prerequisites, not deliverables — run them before relying on the live demo (Spike A) or building the sandbox (Spike B).
+
 See root `README.md` for high-level phase plan summary.
 
 ## Current Position
@@ -48,6 +52,7 @@ This gives the project a clean public narrative: capability attenuation as a str
 | P1 | Real guarded tools | `fs_read`, `fs_write`, narrow `exec`, and denied `network` behind PEP/PDP | **Largely complete** — `ToolCall` + `dispatch()` (authorized) + `execute()` (bypassed) with real side effects. |
 | P2 | Orchestrator with `AUTHZ` toggle | Minimal trusted agent loop with vulnerable and protected modes | **Largely complete** — full `Orchestrator` in `agent/src/lib.rs` with `Enforced` vs `Bypassed`, per-call attenuation + request binding, audit. `agent/tests/enforcement.rs` is the M1 contrast test. |
 | P3 | Showcase demo harness | Fixture repo, injection note, canary listener, traces, sink log, and repro commands | **Complete & verified** (via your `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). |
+| P3.5 | Live principal (agentic loop) | Drive a real model turn-by-turn: emit → enforce → feed result back → react; replay-faithful conversation; `contrast --live` | **Implemented** — `Principal` trait, `Orchestrator::run_principal`, `ScriptedPrincipal`, fixed `OpenAiPrincipalClient` replay fidelity, model-free loop tests. Live off/on control gated on Spike A. |
 | P4 | Linux containment and principal independence | Landlock/seccomp plus second-principal or replay validation | Mis-authorized calls fail at the OS layer; DENY behavior does not depend on principal identity |
 | P5 | Docs and publication assets | README, threat model, design notes, recording, trace diff, audit excerpts | A skeptical reviewer can reproduce the demo and locate limitations quickly |
 | P6 | Adoption-friendly surface | CLI/JSON protocol, Python interop sketch, richer linter or Datalog evaluation | Non-Rust callers can exercise the gate |
@@ -115,6 +120,40 @@ Done when:
 - injected `AUTHZ=off` run leaks the canary;
 - injected `AUTHZ=on` run blocks the leak and still fixes the bug;
 - audit output names the denied caveat and request context.
+
+## P3.5: Live Principal (Multi-Turn Agentic Loop)
+
+**Status: Implemented (Tier 1).** This was a gap in the original plan: the demo
+proved the thesis with a *hand-scripted* feed, never a real model. Prompt
+injection is inherently multi-turn (the model only sees the injected note after
+it reads the file), so a single-shot client could not demonstrate it.
+
+Built:
+
+1. `Principal` trait — an untrusted source of tool calls (live model / scripted
+   replay / test mock). The orchestrator drives it without trusting it.
+2. `Orchestrator::run_principal(principal, max_turns)` — the agentic loop: each
+   turn, ask for tool calls, authorize+execute each, and feed the result (or the
+   denial) back so the principal reacts on its next turn. `run()` now routes the
+   scripted path through this same loop.
+3. `ScriptedPrincipal` — replays a fixed list; keeps the demo/tests model-free.
+4. `OpenAiPrincipalClient` now records each model turn **verbatim** (faithful
+   arguments + ids), fixing a replay bug that would have corrupted multi-turn
+   context and broken strict servers.
+5. CLI/demo: `BASE_URL=... MODEL=... warden-agent <manifest>` drives the live
+   loop; `make demo-contrast-live` / `contrast --live` run the off-vs-on contrast
+   against a real model.
+
+Remaining for full live validation (needs your endpoint + **Spike A**):
+- Run `spikes/ds4-determinism` to confirm byte-identical tool calls; without it
+  the off/on comparison is "secondary evidence", not a clean control.
+- Tune the task prompt / fixture against the chosen model so it reliably reads
+  `AGENT_NOTE.md` and attempts the exfil (the scripted path remains the
+  deterministic baseline regardless).
+
+Done when: a real model, given the injected fixture, attempts the out-of-scope
+read/exfil under `AUTHZ=off` (canary leaks) and is structurally denied under
+`AUTHZ=on` (sink empty), with the legitimate fix still completing.
 
 ## P4: Add Linux Containment As Defense In Depth
 
