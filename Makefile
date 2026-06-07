@@ -9,6 +9,7 @@ help:
 	@echo "  make demo-listener    - Start the canary sink (in foreground)"
 	@echo "  make demo-contrast    - Full automated contrast (clean + injected-vuln + injected-protected)"
 	@echo "  make demo-contrast-live - Live contrast: a real model emits the calls (needs BASE_URL/MODEL)"
+	@echo "                          (experimental — validate determinism first: spikes/ds4-determinism)"
 	@echo "  make demo-clean       - Run clean (no injection) scenario"
 	@echo "  make demo-vuln        - Run injected + AUTHZ=off (vulnerable baseline)"
 	@echo "  make demo-protected   - Run injected + AUTHZ=on (enforced)"
@@ -26,7 +27,8 @@ demo-contrast:
 	cargo run -p warden-demo -- contrast
 
 demo-contrast-live:
-	@echo "Live contrast — drives a real model. Validate determinism first via spikes/ds4-determinism."
+	@echo "Live contrast — EXPERIMENTAL. Drives a real model (needs BASE_URL/MODEL)."
+	@echo "Validate determinism first via spikes/ds4-determinism (Spike A)."
 	cargo run -p warden-demo -- contrast --live
 
 demo-clean:

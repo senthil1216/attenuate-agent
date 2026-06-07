@@ -42,12 +42,18 @@ fn main() -> Result<()> {
     // silently turn `make demo-contrast` (and `make demo-*`) into live runs,
     // ignoring the calls.json argument. Live mode is only entered when no calls
     // file is given and BASE_URL is present.
-    let outcomes = if args.len() >= 3 {
+    // Outcomes are accumulated even if the live loop fails partway, so we can
+    // always report the executed prefix and the full audit log before surfacing
+    // any error.
+    let mut outcomes: Vec<StepOutcome> = Vec::new();
+    let mut run_error: Option<anyhow::Error> = None;
+
+    if args.len() >= 3 {
         // M1 scripted feed.
         let calls: Vec<ToolCall> =
             serde_json::from_str(&std::fs::read_to_string(&args[2]).context("reading calls")?)
                 .context("parsing calls json")?;
-        orchestrator.run(calls)
+        outcomes = orchestrator.run(calls);
     } else if let Ok(base_url) = std::env::var("BASE_URL") {
         // M3: live principal driven through the multi-turn agentic loop.
         let model = std::env::var("MODEL").unwrap_or_else(|_| "ds4-flash".to_string());
@@ -63,12 +69,14 @@ fn main() -> Result<()> {
         eprintln!("M3 live: querying principal at {base_url} model={model}\n");
         let mut principal =
             warden_agent::OpenAiPrincipalClient::new(base_url, model, api_key, messages);
-        orchestrator
-            .run_principal(&mut principal, DEFAULT_MAX_TURNS)
-            .context("live principal loop failed")?
+        if let Err(error) =
+            orchestrator.run_principal(&mut principal, DEFAULT_MAX_TURNS, &mut outcomes)
+        {
+            run_error = Some(error.context("live principal loop failed"));
+        }
     } else {
         usage(&args[0]);
-    };
+    }
 
     for outcome in &outcomes {
         print_outcome(outcome);
@@ -82,6 +90,9 @@ fn main() -> Result<()> {
         println!("{}", entry.event); // Display = human-readable
     }
 
+    if let Some(error) = run_error {
+        return Err(error);
+    }
     Ok(())
 }
 

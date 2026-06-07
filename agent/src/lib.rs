@@ -98,12 +98,14 @@ pub trait Principal {
 /// while exercising the exact same orchestration loop a live model uses.
 pub struct ScriptedPrincipal {
     pending: std::collections::VecDeque<ToolCall>,
+    next_id: usize,
 }
 
 impl ScriptedPrincipal {
     pub fn new(calls: Vec<ToolCall>) -> Self {
         Self {
             pending: calls.into(),
+            next_id: 0,
         }
     }
 
@@ -117,11 +119,16 @@ impl ScriptedPrincipal {
 
 impl Principal for ScriptedPrincipal {
     fn next_tool_calls(&mut self) -> Result<Vec<(ToolCall, String)>> {
-        Ok(self
-            .pending
-            .pop_front()
-            .map(|call| vec![(call, "scripted".to_string())])
-            .unwrap_or_default())
+        match self.pending.pop_front() {
+            Some(call) => {
+                // Unique-per-call synthetic id so nothing can ever key on a
+                // shared id within a run, even though scripted ignores feedback.
+                let id = format!("scripted-{}", self.next_id);
+                self.next_id += 1;
+                Ok(vec![(call, id)])
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     fn add_tool_result(&mut self, _call_id: &str, _content: &str) {}
@@ -130,9 +137,22 @@ impl Principal for ScriptedPrincipal {
 /// Render a decision into the tool-result text fed back to the principal. A
 /// denial is reported honestly so a live model sees it was refused (and may
 /// retry or give up) — exactly as it would against a real guarded runtime.
+/// Cap on how much tool output is fed back into the conversation, so a large
+/// file read or verbose exec output cannot bloat the live model's context.
+const MAX_FEEDBACK_CHARS: usize = 4000;
+
+fn truncate_for_feedback(text: &str) -> String {
+    if text.chars().count() <= MAX_FEEDBACK_CHARS {
+        text.to_string()
+    } else {
+        let head: String = text.chars().take(MAX_FEEDBACK_CHARS).collect();
+        format!("{head}\n... (truncated; {} bytes total)", text.len())
+    }
+}
+
 fn decision_feedback(decision: &StepDecision) -> String {
     match decision {
-        StepDecision::Allowed(ToolOutput::Read { content }) => content.clone(),
+        StepDecision::Allowed(ToolOutput::Read { content }) => truncate_for_feedback(content),
         StepDecision::Allowed(ToolOutput::Write { bytes_written }) => {
             format!("ok: wrote {bytes_written} bytes")
         }
@@ -140,7 +160,11 @@ fn decision_feedback(decision: &StepDecision) -> String {
             status,
             stdout,
             stderr,
-        }) => format!("exit={status:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"),
+        }) => format!(
+            "exit={status:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            truncate_for_feedback(stdout),
+            truncate_for_feedback(stderr)
+        ),
         StepDecision::Allowed(ToolOutput::Network { bytes_sent }) => {
             format!("ok: sent {bytes_sent} bytes")
         }
@@ -187,9 +211,13 @@ impl Orchestrator {
     pub fn run(&mut self, calls: Vec<ToolCall>) -> Vec<StepOutcome> {
         let mut scripted = ScriptedPrincipal::new(calls);
         let budget = scripted.turn_budget();
-        // ScriptedPrincipal cannot error, so the Result is infallible here.
-        self.run_principal(&mut scripted, budget)
-            .expect("ScriptedPrincipal is infallible")
+        let mut outcomes = Vec::new();
+        // ScriptedPrincipal::next_tool_calls always returns Ok, so run_principal
+        // cannot fail for it. The expect encodes (and documents) that invariant;
+        // it is unreachable for any ScriptedPrincipal.
+        self.run_principal(&mut scripted, budget, &mut outcomes)
+            .expect("ScriptedPrincipal is infallible");
+        outcomes
     }
 
     /// Drive a principal to completion: each turn ask it for tool calls, enforce
@@ -197,15 +225,16 @@ impl Orchestrator {
     /// react. This is the agentic loop that lets a live model be genuinely
     /// prompt-injected and then structurally contained.
     ///
-    /// A principal error (transport / JSON / model failure) is propagated to the
-    /// caller rather than swallowed, so a live run can distinguish failure from
-    /// clean termination.
+    /// Outcomes are appended to `outcomes` as they happen, so on an error the
+    /// caller still holds the executed prefix (and the orchestrator's audit log
+    /// retains every decision). A principal error is propagated rather than
+    /// swallowed, so a live run can distinguish failure from clean termination.
     pub fn run_principal<P: Principal>(
         &mut self,
         principal: &mut P,
         max_turns: usize,
-    ) -> Result<Vec<StepOutcome>> {
-        let mut outcomes = Vec::new();
+        outcomes: &mut Vec<StepOutcome>,
+    ) -> Result<()> {
         for _turn in 0..max_turns {
             let calls = principal.next_tool_calls()?;
             if calls.is_empty() {
@@ -217,7 +246,7 @@ impl Orchestrator {
                 outcomes.push(outcome);
             }
         }
-        Ok(outcomes)
+        Ok(())
     }
 
     pub fn step(&mut self, call: ToolCall) -> StepOutcome {
@@ -675,6 +704,32 @@ impl OpenAiPrincipalClient {
         }
         calls
     }
+
+    /// Classify one model turn for the loop: executable calls, genuinely done
+    /// (no tool calls), or an all-unparseable turn that should be retried.
+    /// Pure given the AssistantMessage — the model-free unit tests drive this.
+    fn classify_assistant(&mut self, assistant: AssistantMessage) -> TurnOutcome {
+        let emitted_tool_calls = !assistant.tool_calls.is_empty();
+        let calls = self.ingest_assistant(assistant);
+        if !calls.is_empty() {
+            TurnOutcome::Calls(calls)
+        } else if emitted_tool_calls {
+            TurnOutcome::RetryAfterUnparseable
+        } else {
+            TurnOutcome::Done
+        }
+    }
+}
+
+/// The result of classifying a single model turn in the agentic loop.
+enum TurnOutcome {
+    /// Executable tool calls to run.
+    Calls(Vec<(ToolCall, String)>),
+    /// The model emitted no tool calls — it is finished.
+    Done,
+    /// The model emitted only unparseable tool calls (already answered with
+    /// error results); re-query so it can correct itself.
+    RetryAfterUnparseable,
 }
 
 impl Principal for OpenAiPrincipalClient {
@@ -695,13 +750,10 @@ impl Principal for OpenAiPrincipalClient {
                 self.api_key.as_deref(),
                 &self.messages,
             )?;
-            let emitted_tool_calls = !assistant.tool_calls.is_empty();
-            let calls = self.ingest_assistant(assistant);
-            if !calls.is_empty() {
-                return Ok(calls);
-            }
-            if !emitted_tool_calls {
-                return Ok(Vec::new());
+            match self.classify_assistant(assistant) {
+                TurnOutcome::Calls(calls) => return Ok(calls),
+                TurnOutcome::Done => return Ok(Vec::new()),
+                TurnOutcome::RetryAfterUnparseable => continue,
             }
         }
         Ok(Vec::new())
@@ -753,7 +805,8 @@ mod tests {
         let mut orchestrator =
             Orchestrator::new(&repo_scoped_manifest(), AuthzMode::Enforced).unwrap();
         let mut principal = ErroringPrincipal;
-        let result = orchestrator.run_principal(&mut principal, 8);
+        let mut outcomes = Vec::new();
+        let result = orchestrator.run_principal(&mut principal, 8, &mut outcomes);
         assert!(
             result.is_err(),
             "a principal error must propagate to the caller, not be swallowed"
@@ -792,7 +845,10 @@ mod tests {
             feedback: Vec::new(),
         };
 
-        let outcomes = orchestrator.run_principal(&mut principal, 8).unwrap();
+        let mut outcomes = Vec::new();
+        orchestrator
+            .run_principal(&mut principal, 8, &mut outcomes)
+            .unwrap();
 
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(outcomes[0].decision, StepDecision::Denied(_)));
@@ -856,6 +912,92 @@ mod tests {
             .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("good")));
     }
 
+    fn live_client() -> OpenAiPrincipalClient {
+        OpenAiPrincipalClient::new(
+            "http://unused",
+            "test-model",
+            None,
+            build_demo_initial_messages("task"),
+        )
+    }
+
+    fn raw(name: &str, args: &str, id: &str) -> RawToolCall {
+        RawToolCall {
+            id: id.to_string(),
+            function: RawFunctionCall {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn classify_returns_executable_calls() {
+        let mut client = live_client();
+        let assistant = AssistantMessage {
+            content: None,
+            tool_calls: vec![raw("fs_read", r#"{"path":"/repo/x"}"#, "id1")],
+        };
+        match client.classify_assistant(assistant) {
+            TurnOutcome::Calls(calls) => assert_eq!(calls.len(), 1),
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    #[test]
+    fn classify_mixed_batch_returns_only_parseable() {
+        let mut client = live_client();
+        let assistant = AssistantMessage {
+            content: None,
+            tool_calls: vec![
+                raw("fs_read", r#"{"path":"/repo/x"}"#, "good"),
+                raw("fs_read", "not json", "bad"),
+            ],
+        };
+        match client.classify_assistant(assistant) {
+            TurnOutcome::Calls(calls) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].1, "good");
+            }
+            _ => panic!("expected Calls"),
+        }
+    }
+
+    #[test]
+    fn classify_all_unparseable_requests_retry() {
+        let mut client = live_client();
+        let assistant = AssistantMessage {
+            content: None,
+            tool_calls: vec![raw("fs_read", "not json", "bad")],
+        };
+        assert!(matches!(
+            client.classify_assistant(assistant),
+            TurnOutcome::RetryAfterUnparseable
+        ));
+    }
+
+    #[test]
+    fn classify_content_only_is_done() {
+        let mut client = live_client();
+        let assistant = AssistantMessage {
+            content: Some("all done, the test passes".to_string()),
+            tool_calls: vec![],
+        };
+        assert!(matches!(
+            client.classify_assistant(assistant),
+            TurnOutcome::Done
+        ));
+    }
+
+    #[test]
+    fn feedback_truncates_large_read_content() {
+        let big = "x".repeat(MAX_FEEDBACK_CHARS + 500);
+        let decision = StepDecision::Allowed(ToolOutput::Read { content: big });
+        let fed = decision_feedback(&decision);
+        assert!(fed.contains("truncated"));
+        assert!(fed.chars().count() < MAX_FEEDBACK_CHARS + 200);
+    }
+
     #[test]
     fn loop_stops_when_principal_emits_no_calls() {
         let mut orchestrator =
@@ -864,7 +1006,10 @@ mod tests {
             turns: std::collections::VecDeque::new(),
             feedback: Vec::new(),
         };
-        let outcomes = orchestrator.run_principal(&mut principal, 8).unwrap();
+        let mut outcomes = Vec::new();
+        orchestrator
+            .run_principal(&mut principal, 8, &mut outcomes)
+            .unwrap();
         assert!(outcomes.is_empty());
         assert!(principal.feedback.is_empty());
     }
