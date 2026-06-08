@@ -51,7 +51,7 @@ The `demo` crate is the home for the M3 showcase harness/fixture (on-disk exampl
 
 ## Recording Tips
 
-The `make demo-asciinema` target (or direct asciinema) lets you record the AUTHZ=off|on contrast at the capability layer — before any LLM is wired (M1/M2). This de-risks the M3 narrative early by proving the enforcement story with the scripted principal feed from the injection note.
+The `make demo-asciinema` target (or direct asciinema) records the AUTHZ=off|on contrast at the capability layer with the scripted principal feed — the deterministic baseline used in the write-up.
 
 **Prerequisite:** `asciinema` must be installed (the Makefile target will give helpful instructions if missing).
 
@@ -73,6 +73,10 @@ Play recordings with `asciinema play demo-contrast.cast`.
 
 See also the root Makefile for the `demo-asciinema` target (records via the contrast subcommand, which exercises both modes with internal listener).
 
+### Split per-run GIFs (used in the write-up)
+
+`make demo-gifs` renders two *separate* animated GIFs via the VHS tapes in `demo/tapes/` — `assets/demo-vuln.gif` (AUTHZ=off, the attack succeeds) and `assets/demo-protected.gif` (AUTHZ=on, structurally denied). These are the off-vs-on visuals in the article. Requires `vhs` (`brew install vhs`).
+
 ## Next (for the article)
 
 See the "Immediate Next Actions" and "Publication Strategy" sections in the root `docs/NEXT_STEPS.md`.
@@ -88,6 +92,6 @@ Typical artifacts to include:
 ## Repro Requirements
 
 - Rust (see root `rust-toolchain.toml`)
-- The `make` targets work on both macOS (development) and Linux (full containment claims).
+- The `make` targets work on both macOS and Linux.
 
-The security claims in the demo are only fully enforceable on Linux (Landlock + seccomp). macOS is supported for development only.
+The capability-layer enforcement shown here — the PEP/PDP denial of out-of-scope reads and network egress — is pure Rust and runs identically on macOS and Linux; it is what produces every `DENIED` line in this demo. The optional OS-level sandbox (Landlock + seccomp, Linux only) is **planned defense-in-depth and not yet implemented** (`sandbox` is currently a stub), so it is *not* part of what this demo enforces. See `docs/THREAT_MODEL.md`.

@@ -311,19 +311,21 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
     println!("║  KEY DIFFERENCES                                           ║");
     println!("╚════════════════════════════════════════════════════════════╝\n");
 
-    // Robust detection based on behavior + sink (not just content strings,
-    // because Allowed reads now print "read N bytes" for cleanliness).
-    let secret_leaked_in_vuln =
-        vuln_stdout.contains("read 17 bytes") || !sink_content.trim().is_empty();
+    // Verdicts use stable signals only: the policy's denial-reason strings (tied
+    // to the PDP, not to any byte count) and the canary sink (authoritative proof
+    // the payload left the boundary).
+    let exfil_captured = !sink_content.trim().is_empty();
+    let vuln_denied_anything = vuln_stdout.contains("[DENY");
     let secret_denied_in_prot = prot_stdout.contains("read path is outside capability scope");
+    let network_denied_in_prot = prot_stdout.contains("network policy denies all egress");
 
     println!("Secret canary read (the injected exfil target):");
     println!(
         "  vuln (off):     {}",
-        if secret_leaked_in_vuln {
-            "SUCCEEDED — canary content was read"
+        if !vuln_denied_anything {
+            "ALLOWED — ambient authority let the agent read it"
         } else {
-            "did not leak (unexpected)"
+            "unexpected (a denial appeared with enforcement off)"
         }
     );
     println!(
@@ -331,21 +333,17 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
         if secret_denied_in_prot {
             "DENIED — \"read path is outside capability scope\""
         } else {
-            "unexpected"
+            "unexpected (expected a scope denial)"
         }
     );
-
-    let network_succeeded_in_vuln =
-        vuln_stdout.contains("sent 19 bytes") || !sink_content.trim().is_empty();
-    let network_denied_in_prot = prot_stdout.contains("network policy denies all egress");
 
     println!("\nNetwork exfil attempt (the second part of the injection):");
     println!(
         "  vuln (off):     {}",
-        if network_succeeded_in_vuln {
+        if exfil_captured {
             "SUCCEEDED — payload reached the canary sink"
         } else {
-            "no"
+            "no payload captured (is the listener running?)"
         }
     );
     println!(
@@ -353,7 +351,7 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
         if network_denied_in_prot {
             "DENIED — \"network policy denies all egress\""
         } else {
-            "no"
+            "unexpected (expected a network denial)"
         }
     );
 
@@ -370,7 +368,6 @@ fn run_contrast(extra_args: &[String]) -> Result<()> {
     println!("  - The vulnerable run has zero enforcement (pure ambient authority).");
 
     println!("\nContrast complete. The four .log files + the raw output above are ready for the article/recording.");
-    println!("(Note: the small \"did not leak\" glitch in earlier summary logic has been fixed.)");
 
     // The listener thread will be terminated when we exit
     drop(listener_handle);
