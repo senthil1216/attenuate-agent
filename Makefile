@@ -1,7 +1,7 @@
 # Warden Demo Harness Makefile
 # Run `make help` for available targets.
 
-.PHONY: help demo-setup demo-listener demo-contrast demo-contrast-live demo-clean demo-vuln demo-protected clean-artifacts demo-asciinema
+.PHONY: help demo-setup demo-listener demo-contrast demo-contrast-live demo-clean demo-vuln demo-protected clean-artifacts demo-asciinema demo-gifs
 
 help:
 	@echo "Warden Demo targets:"
@@ -10,6 +10,7 @@ help:
 	@echo "  make demo-contrast    - Full automated contrast (clean + injected-vuln + injected-protected)"
 	@echo "  make demo-contrast-live - Live contrast: a real model emits the calls (needs BASE_URL/MODEL)"
 	@echo "                          (experimental — validate determinism first: spikes/ds4-determinism)"
+	@echo "  make demo-gifs        - Render split per-run GIFs (assets/demo-vuln.gif + demo-protected.gif; needs vhs)"
 	@echo "  make demo-clean       - Run clean (no injection) scenario"
 	@echo "  make demo-vuln        - Run injected + AUTHZ=off (vulnerable baseline)"
 	@echo "  make demo-protected   - Run injected + AUTHZ=on (enforced)"
@@ -62,3 +63,10 @@ demo-asciinema:
 	@echo "Recording saved to demo-contrast.cast"
 	@echo "Play with: asciinema play demo-contrast.cast"
 	@echo "(Tip: also record 'make demo-clean' for baseline if desired)"
+
+demo-gifs:
+	@command -v vhs >/dev/null 2>&1 || { echo "vhs not found — install with: brew install vhs"; exit 1; }
+	cargo build -q -p warden-agent -p warden-demo
+	vhs demo/tapes/vuln.tape
+	vhs demo/tapes/protected.tape
+	@echo "Wrote assets/demo-vuln.gif and assets/demo-protected.gif"
