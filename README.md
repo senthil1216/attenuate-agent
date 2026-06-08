@@ -4,7 +4,7 @@
 
 Warden provides reusable building blocks for systems that need to grant *scoped, attenuable, time-bounded* authority to potentially untrusted callers — and prove, structurally, that the authority can only narrow as it flows.
 
-> Status: Capability engine (P0–P2), the reference orchestrator with a multi-turn agentic loop (`AUTHZ=off|on`), and the demo harness are implemented and tested; `make demo-contrast` produces the off-vs-on contrast artifacts. **Not yet implemented:** the OS-level sandbox (`sandbox` is a stub) and the live-model end-to-end validation. Policy decisions are made in Rust, not in-token Datalog (see `docs/DESIGN.md`). Next: P5 docs + article prep. See `docs/NEXT_STEPS.md` and `demo/artifacts/`.
+> Status: The capability engine, the reference orchestrator with a multi-turn agentic loop (`AUTHZ=off|on`), and the demo harness are implemented and tested; `make demo-contrast` produces the off-vs-on contrast artifacts. **Not yet implemented:** the OS-level sandbox (`sandbox` is a stub) and the live-model end-to-end validation. Policy decisions are made in Rust, not in-token Datalog (see `docs/DESIGN.md`). Next: docs polish + article prep. See `docs/NEXT_STEPS.md` and `demo/artifacts/`.
 
 ---
 
@@ -31,7 +31,7 @@ cargo test --workspace
 
 See `docs/DEVELOPMENT.md` for setup notes.
 
-### Quick Demo (P3 showcase)
+### Quick Demo
 
 ```sh
 make demo-contrast   # full clean + injected-vuln + injected-protected
@@ -204,29 +204,11 @@ The first six crates are the framework. `agent`, `tools`, and `demo` are the bun
 
 ---
 
-## Phased work plan
+## Project history & roadmap
 
-The attenuation proof is the project's **go/no-go gate**; everything is scheduled behind proving it.
+Warden began as a 4-week phased build, gated on first proving the attenuation algebra has no widening operation (the "P0 gate") — then enforcement (PEP/PDP) → a reference orchestrator with an `AUTHZ=off|on` toggle → a reproducible demo contrast → an OS sandbox. The capability engine, the multi-turn agentic loop, and the demo contrast are complete; the OS-level sandbox (`sandbox` is currently a stub) and full live-model validation are the active remaining work.
 
-| Priority      | Item                                                                 | Phase   |
-|---------------|----------------------------------------------------------------------|---------|
-| **P0-GATE**   | Attenuation API + type-level constraint + monotonicity property tests | 1       |
-| P1            | PEP/PDP split + architectural default-deny + policy linter           | 2       |
-| P1            | Reference orchestrator integration with `AUTHZ=on\|off` toggle       | 3       |
-| P2            | Landlock/seccomp sandboxing (defense-in-depth)                       | 4       |
-| P3            | Demo / principal-independence cross-validation                       | 5–6     |
-| P4            | SPIFFE federation — **design sketch only, zero code**                | section 9 |
-
-### Phase outline
-
-- **Phase 0 — Foundations** (Week 1, ~3 days): language decision, repo/CI/lint/license, baseline orchestrator with NO authorization (deliberate vulnerable baseline, clearly marked and isolated).
-- **Phase 1 — Capability core (P0-GATE)** (Week 1–2, ~4 days): root minting from the manifest, append-only attenuation wrapping biscuit primitives, type-level single-constructor constraint, proptest suite. **Done when:** a generated attempt to widen scope is NOT expressible in the type system, and property tests pass. **Gates all downstream work.**
-- **Phase 2 — Enforcement boundary (PEP + PDP)** (Week 2, ~3 days): signature chain, expiry, root revocation check, request-bound binding; Rust decision over full caveat set + context; policy linter (rejects always-allow rules); property-based tests for full policy evaluation across all four operation classes.
-- **Phase 3 — Reference orchestrator integration** (Week 2–3, ~3 days): `fs_read`, `fs_write`, `exec`, `network` tools reachable only via the PEP; task-start minting from manifest (trusted channel only); `AUTHZ=off|on` toggle.
-- **Phase 4 — Sandbox containment (P2)** (Week 3, ~3 days): Landlock fs confinement to `repo_root` for exec'd tools; seccomp blocking network syscalls under `network:deny_all`. **Done when:** a deliberately mis-authorized call still fails at the OS boundary.
-- **Phase 5 — Reference demo** (Week 3–4, ~3 days): fixture (small Python package with a real, fixable failing test); indirect injection embedded as a plausible in-repo "agent maintenance note"; canary file outside repo root; local listener on `127.0.0.1:9999`; deterministic decoding (temperature 0, greedy, fixed seed, tracing on); injection corpus (4–5 phrasings); `make demo-clean`, `make demo-vuln`, `make demo-protected`.
-- **Phase 6 — Principal-independence** (Week 4, ~2 days): repoint the demo to a second principal (different model lineage) via base-URL swap, no dispatch code change; re-run demo-vuln / demo-protected; document identical DENY outcomes.
-- **Phase 7 — Documentation** (Week 4, ~2 days): `README`, `THREAT_MODEL.md`, `DESIGN.md`, `FEDERATION.md`. **Done when:** a reviewer reproduces the demo in one command and locates the limitations section without searching.
+See [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) for the living roadmap and current status, and the write-up at <https://www.senthilsiva.com/posts/prompt-injection-is-an-authorization-bug/>. The full original phased plan is preserved in git history.
 
 ---
 
@@ -273,13 +255,13 @@ The framework is successful when:
 
 ## Key risks
 
-- **Attenuation API allows widening via a bug** — HIGHEST severity; it is the whole thesis. Mitigation: type-level single-constructor append-only constraint + proptest + wrap biscuit primitives, never re-implement. Gated as P0 (Phase 1).
-- **Policy single point of catastrophic failure** (one always-allow rule bypasses everything). Mitigation: static linter, architectural default-deny that cannot be shadowed, review-gated policy changes (Phase 2).
+- **Attenuation API allows widening via a bug** — HIGHEST severity; it is the whole thesis. Mitigation: type-level single-constructor append-only constraint + proptest + wrap biscuit primitives, never re-implement. Gated first as the P0 attenuation proof.
+- **Policy single point of catastrophic failure** (one always-allow rule bypasses everything). Mitigation: static linter, architectural default-deny that cannot be shadowed, review-gated policy changes.
 - **Root-capability derivation from untrusted input.** Mitigation: operator-authored manifest, provenance strictly outside the workspace, manifest in TCB, authority-ceiling invariant for any future NL parsing.
 - **Orchestrator trust conflation.** Mitigation: explicit split — code integrity trusted (TCB), behavioral decisions untrusted; compromised binary out of scope.
 - **Revocation of offline-attenuated children.** Mitigation: decisive position — root-only revocation; child non-revocable by design; seconds-wide residual window named as an accepted, documented limitation.
 - **Replay with same tool ID but different arguments.** Mitigation: bind nonce over `hash(tool name + arguments + nonce)`, not the ID alone.
-- **DS4 tool-binding external dependency** for the reference demo (alpha project; DSML/ID mechanics may change). Mitigation: validate in week 1 (Phase 0); fallback binding path identified if it does not behave as expected.
+- **DS4 tool-binding external dependency** for the reference demo (alpha project; DSML/ID mechanics may change). Mitigation: validate early; fallback binding path identified if it does not behave as expected.
 - **Scope creep** (SPIFFE, custom policy language, macOS parity). Mitigation: SPIFFE hard-fenced to a one-page sketch; biscuit used as-is; macOS explicitly non-parity and dev-only.
 
 ---
@@ -290,4 +272,4 @@ The framework is successful when:
 
 ---
 
-*Project plan v1.2 — consolidated revision incorporating two independent security reviews.*
+*Original project plan v1.2 (historical) — consolidated revision incorporating two independent security reviews. The living roadmap is now in `docs/NEXT_STEPS.md`.*
