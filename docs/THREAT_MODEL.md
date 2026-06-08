@@ -67,9 +67,9 @@ Warden is an *authorization architecture* defense. It is complementary to (and d
 
 ## Versioning & Updates
 
-This threat model is tied to the current implementation (as of the demo harness in PR #10 and subsequent work). Significant changes to the capability model, revocation story, or TCB will require an update to this document.
+This threat model is tied to the current implementation. Significant changes to the capability model, revocation story, or TCB will require an update to this document.
 
 See also:
-- `docs/NEXT_STEPS.md` (current plan and status)
+- `docs/NEXT_STEPS.md` (internal plan and historical status)
 - `README.md` (high-level positioning)
 - The `agent/tests/enforcement.rs` test (the executable specification of the core contrast)

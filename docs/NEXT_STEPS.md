@@ -5,7 +5,7 @@
 
 **Fate of this document:** This is the **detailed living working document** for next steps, planning, and tracking progress against the original phased plan. High-level phase status and summary live in the root `README.md` (see "Status" and "Quick Demo" sections). Do not delete this file; update it after each milestone.
 
-**Status:** P3 demo harness complete & verified (via `make demo-contrast` + `make demo-clean` runs; on-disk fixtures, artifacts, and human-readable output produced). The demo crate now hosts the M3 fixture/harness (see `demo/README.md`). Engine (P0-P2) solid with acceptance tests. Next: P5 docs + article prep (threat model, recording, trace diff). An AUTHZ=off|on asciinema target is available via `make demo-asciinema` (records the capability-layer contrast before any LLM is wired — de-risks M3 narrative early).
+**Status:** Capability engine (P0–P2), multi-turn agentic loop (P3.5), and demo harness are implemented and tested; `make demo-contrast` produces the off-vs-on contrast artifacts. **Not yet implemented:** the OS-level sandbox (`sandbox` is a stub) and full live-model end-to-end validation (gated on Spike A determinism). Policy decisions are made in Rust, not in-token Datalog (see `docs/DESIGN.md`). Next: P5 docs polish + P4 sandbox. See `docs/THREAT_MODEL.md` for the current honest positioning. An AUTHZ=off|on asciinema target is available via `make demo-asciinema` (records the capability-layer contrast before any LLM is wired — de-risks the M3 narrative).
 
 **Latest (Tier 1 / P3.5 — live principal):** the **multi-turn agentic loop is implemented**. A `Principal` trait abstracts the source of tool calls; `Orchestrator::run_principal` drives it (emit → enforce → feed result/denial back → react); `ScriptedPrincipal` keeps the scripted demo/tests model-free; `OpenAiPrincipalClient` records each model turn verbatim (replay-faithful) for real multi-turn use; `make demo-contrast-live` / `cargo run -p warden-demo -- contrast --live` run the contrast against a real model. This lets a live model read the injected `AGENT_NOTE.md` and *then* attempt the out-of-scope action, only to be structurally denied. **Gated on Spike A** (determinism) for a clean off/on control — see "M0 de-risk spikes" below.
 
@@ -176,11 +176,11 @@ Goal: make the project reviewable and post-ready.
 3. Add or expand threat-model documentation: TCB, in-scope attacks, out-of-scope attacks, residual risks, child-token TTL window, and permitted-binary misuse.
 4. Add design notes: why biscuit, why Rust-side attenuation validation, request-binding rationale, default-deny behavior, and audit-chain design.
 5. Prepare artifacts:
-   - 30-45 second terminal recording.
+   - 30-45 second terminal recording (or asciinema via `make demo-asciinema`).
    - Side-by-side trace diff.
    - `sink.log` showing canary present in vulnerable mode and absent in protected mode.
    - Audit log excerpt with human-readable denial reason.
-   - Architecture diagram from README.
+   - Architecture diagram.
    - One-command or few-command repro instructions.
 
 Done when: a skeptical reviewer can reproduce the core result in fewer than five commands.
@@ -197,6 +197,8 @@ Goal: show Warden as reusable framework infrastructure, not only a one-off demo.
 Defer this until the demo is working.
 
 ## Immediate Next Actions
+
+> **Historical note:** The tasks and status below are from the initial P3/P5 push (around the time the main article was being drafted). They are kept for context as a living record of the project's evolution. The core demo harness and initial publication assets work described here is complete.
 
 **Current reality (as of this update):** You have now successfully run both:
 
@@ -307,7 +309,7 @@ The plan succeeds when:
 
 ## How To Maintain This Plan
 
-Keep this file as the canonical tactical plan. The README should remain the high-level vision and quick-start entry point. Update this document after each major milestone, especially after the first working `demo-vuln` vs `demo-protected` pair with artifacts.
+Keep this file as the canonical tactical / historical plan. The README should remain the high-level vision and quick-start entry point. Update this document after each major milestone for internal tracking.
 
 ## References
 

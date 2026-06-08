@@ -68,14 +68,10 @@ Bypass is not granted to admins by default (enforced for everyone).
 
 **Note:** Classic branch protection is not used; rulesets are the source of truth for these policies.
 
-## Current implementation milestone
+## Current state (summary)
 
-The repository is scaffolded as a Rust workspace with crate boundaries matching the design in `README.md`.
+See the status line at the top of `README.md` and `docs/NEXT_STEPS.md` for the latest milestone status.
 
-The first implemented slice is the P0 capability boundary:
-
-- `manifest` defines the trusted task manifest shape.
-- `capability` defines root and child capabilities plus append-only attenuation.
-- property tests reject read-scope widening and accept read-scope narrowing.
-
-The capability crate currently uses an internal permission model to pin down the API and tests. The next milestone is to replace the internal token representation with `biscuit-auth` while preserving the same append-only public API.
+High-level:
+- Capability engine (P0–P2), multi-turn `Principal` + `Orchestrator::run_principal` loop (P3.5), and demo harness are complete.
+- `sandbox` crate remains a no-op stub (Linux Landlock + seccomp containment is planned as defense-in-depth only).
