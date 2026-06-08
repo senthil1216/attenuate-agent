@@ -56,11 +56,11 @@ Every mint, attenuation, allow, and deny is recorded via `audit::chain_entry`. T
 
 The current implementation is intentionally simple (in-memory `Vec<AuditEntry>` for the orchestrator, blake3 hashes). A production version could stream to a file or remote store while still offering the same `verify_chain` API.
 
-## Sandbox (Defense in Depth)
+## Sandbox (Defense in Depth) — planned, not yet implemented
 
-Landlock + seccomp are deliberately *defense in depth*, not the primary mechanism. Even if a child capability is somehow widened (via a future bug), the OS sandbox should still confine the executed binary to the declared filesystem roots and syscall set.
+Landlock + seccomp are intended as *defense in depth*, not the primary mechanism: even if a child capability were somehow widened (via a future bug), an OS sandbox should still confine the executed binary to the declared filesystem roots and syscall set. **This is not built yet — the `sandbox` crate is currently a stub.**
 
-On macOS we explicitly do *not* claim containment (Seatbelt is weaker for this use case). The demo works on macOS for development, but the security claims require Linux.
+Crucially, the structural guarantee does *not* depend on it. The capability layer (append-only attenuation + PEP/PDP) is pure Rust and enforces identically on macOS and Linux — it is what produces every denial in the demo. The OS sandbox is an additional, Linux-only belt-and-suspenders layer for the future. On macOS we would not claim OS-level containment (Seatbelt is weaker for this use case), but the **capability-layer** security claims — the actual thesis — hold on both platforms.
 
 ## Non-Goals (kept out of scope)
 

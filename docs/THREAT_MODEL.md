@@ -12,7 +12,7 @@ This document makes the security claims, trusted computing base, and limitations
 - The code integrity of:
   - The orchestrator (trusted code, even when behaviorally driven by an untrusted principal).
   - `capability`, `pep`, `pdp`, `audit`, `tools`, and `manifest` crates.
-  - The sandbox (when enabled on Linux).
+  - The sandbox (planned defense-in-depth, Linux-only; not yet implemented).
 
 **Important distinction:** The orchestrator's *code* is trusted. The orchestrator being tricked by its untrusted driver (model output, etc.) into requesting a bad action is exactly what the framework is designed to bound.
 
