@@ -1,8 +1,9 @@
 use biscuit_auth::builder::BlockBuilder;
-use biscuit_auth::{Biscuit, KeyPair, PublicKey};
+use biscuit_auth::{AuthorizerLimits, Biscuit, KeyPair, PublicKey};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{NetworkPolicy, PermissionSet, RequestBinding};
@@ -78,6 +79,18 @@ pub(crate) fn decode_state(
 ) -> Result<DecodedState, CodecError> {
     let biscuit = Biscuit::from(token_bytes, root_public_key)?;
     let mut authorizer = biscuit.authorizer()?;
+
+    // The Datalog authorizer's default wall-clock budget is 1ms, and it is
+    // consumed cumulatively across every `query_all` below. Under load (CI
+    // runners, or the runtime authorization path via `verify_and_decode`) the
+    // sequential queries can exceed it and fail spuriously with "Reached
+    // Datalog execution limits" — denying a perfectly valid capability. Relax
+    // only the timer; keep the fact/iteration caps at their defaults so the
+    // engine is still bounded against a malicious token (DoS protection).
+    authorizer.set_limits(AuthorizerLimits {
+        max_time: Duration::from_secs(5),
+        ..Default::default()
+    });
 
     let task_id_rows: Vec<(String,)> = authorizer.query_all("data($id) <- task_id($id)")?;
     let task_id_str = task_id_rows
