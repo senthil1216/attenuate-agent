@@ -16,6 +16,19 @@ Reasons:
 - Property-based tests over the decision function are straightforward.
 - We still get the benefits of biscuit for the token layer (attenuation, signature chain, offline use, tamper-evident facts).
 
+### Enforcement reads the token, not the struct
+
+The security of the previous paragraph hinges on one rule: the `PermissionSet` fed to `pdp::decide` must be **derived from the cryptographically verified token**, never from a plaintext struct field that an attacker could edit independently of the signature.
+
+A `ChildCapability` carries a convenience mirror of its permissions as an ordinary `serde`-(de)serializable struct field. That mirror is *not* covered by the signature on its own. If enforcement decided over the struct, an attacker could take any legitimately-narrowed, validly-signed capability, deserialize it, widen the struct's `permissions`/`expires_at`/`request_binding` back toward root authority, and re-serialize: the signature still verifies (the token bytes are untouched) while the PDP reads the widened struct — a silent privilege escalation across the very serde boundary the token format is designed to support ("offline-attenuable").
+
+To close this, the PEP (`pep::verify`) consumes a `VerifiedState` produced by `ChildCapability::verify_and_decode`, which:
+
+1. recovers the authoritative `PermissionSet`, `expires_at`, and request binding by decoding the latest signed biscuit block (`biscuit_codec::decode_state`); and
+2. rejects (`CapabilityError::TokenStateMismatch` → `VerificationError::StateTampered`) any capability whose struct mirror disagrees with the decoded token.
+
+`VerifiedCapability` then exposes *only* the token-derived state, so the struct mirror is physically unreachable on the decision path. Honestly-constructed capabilities build the struct and the token block from the same `PermissionSet`, so the mismatch check only ever fires on tampering. Regression coverage: `pep::tests::verify_rejects_struct_permissions_widened_after_signing`, which asserts that the signature-chain-only check still passes the tampered capability (the old, vulnerable behavior) while `verify` rejects it.
+
 If in the future we decide that embedding more of the policy logic inside biscuit authorizers adds value (e.g. for external reviewers who want to run the exact same Datalog), the current design keeps the door open; the facts we already emit (`read_root`, `write_root`, `exec_binary`, `network`, `expires_at`, binding facts) are the ones a biscuit authorizer would need.
 
 ## Request Binding Design
