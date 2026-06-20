@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Rust 1.88. The repository includes `rust-toolchain.toml`.
-- Linux for enforced sandbox containment. macOS is development-only and does not provide the final containment guarantee.
+- macOS or Linux. The capability-layer enforcement (the structural guarantee) is pure Rust and runs on both. The planned OS-level sandbox (Landlock + seccomp, defense-in-depth) is Linux-only and **not yet implemented** (`sandbox` is a stub).
 
 ## Common commands
 
@@ -14,7 +14,7 @@ cargo test --locked --workspace
 cargo check --locked -p warden-sandbox --features linux-containment
 ```
 
-### Demo harness (P3 showcase)
+### Demo harness
 
 ```sh
 make demo-contrast          # one-command: clean + injected under off/on + listener + logs + KEY DIFFERENCES
