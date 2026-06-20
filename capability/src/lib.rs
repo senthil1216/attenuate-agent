@@ -68,6 +68,40 @@ struct Caveat {
     request_binding: Option<RequestBinding>,
 }
 
+/// The authoritative capability state recovered from the cryptographically
+/// verified biscuit token — NOT from the in-memory struct fields.
+///
+/// This is the only state the PEP/PDP must trust. The plaintext `permissions`
+/// field on a `ChildCapability` is a convenience mirror; it is not covered by
+/// the signature on its own and must never be the basis of an authorization
+/// decision. Enforcement code consumes a `VerifiedState`, which is derived from
+/// the signed token blocks via [`ChildCapability::verify_and_decode`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedState {
+    task_id: Uuid,
+    permissions: PermissionSet,
+    expires_at: DateTime<Utc>,
+    request_binding: Option<RequestBinding>,
+}
+
+impl VerifiedState {
+    pub fn task_id(&self) -> Uuid {
+        self.task_id
+    }
+
+    pub fn permissions(&self) -> &PermissionSet {
+        &self.permissions
+    }
+
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.expires_at
+    }
+
+    pub fn request_binding(&self) -> Option<&RequestBinding> {
+        self.request_binding.as_ref()
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CapabilityError {
     #[error("invalid task manifest: {0}")]
@@ -86,6 +120,8 @@ pub enum CapabilityError {
     TtlOverflow,
     #[error("failed to build or parse biscuit token: {0}")]
     Biscuit(String),
+    #[error("capability struct state disagrees with its signed token")]
+    TokenStateMismatch,
 }
 
 impl From<biscuit_codec::CodecError> for CapabilityError {
@@ -326,6 +362,39 @@ impl ChildCapability {
         let public_key = parse_public_key(&self.root_public_key)?;
         biscuit_codec::verify_signature(&self.token, public_key)?;
         Ok(())
+    }
+
+    /// Verify the biscuit signature chain and recover the authoritative
+    /// capability state **from the signed token**, not from the plaintext
+    /// struct fields.
+    ///
+    /// This is the enforcement entry point. It additionally rejects any
+    /// capability whose in-memory `permissions`/`expires_at`/`request_binding`
+    /// fields disagree with the signed token — e.g. a validly-signed token
+    /// carrying a `permissions` struct that was widened after signing across a
+    /// serialization boundary. Without this check the signature would verify
+    /// while a downstream PDP read the tampered struct, silently widening
+    /// authority. See [`VerifiedState`].
+    pub fn verify_and_decode(&self) -> Result<VerifiedState, CapabilityError> {
+        let public_key = parse_public_key(&self.root_public_key)?;
+        let decoded = biscuit_codec::decode_state(&self.token, public_key)?;
+
+        // Defense in depth: the plaintext mirror must not diverge from the
+        // signed token. Honestly-constructed capabilities build both from the
+        // same `permissions` object, so this only ever fires on tampering.
+        if decoded.permissions != self.permissions
+            || decoded.expires_at != self.expires_at
+            || decoded.request_binding.as_ref() != self.request_binding()
+        {
+            return Err(CapabilityError::TokenStateMismatch);
+        }
+
+        Ok(VerifiedState {
+            task_id: decoded.task_id,
+            permissions: decoded.permissions,
+            expires_at: decoded.expires_at,
+            request_binding: decoded.request_binding,
+        })
     }
 }
 

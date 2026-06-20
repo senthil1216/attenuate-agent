@@ -27,7 +27,7 @@ pub fn authorize_only(
         .map(|nonce| request_binding_for(&request, nonce))
         .transpose()?;
     let verified = verify(capability, chrono::Utc::now(), actual_binding.as_ref())?;
-    match decide(verified.capability().permissions(), &request) {
+    match decide(verified.permissions(), &request) {
         Decision::Allow => Ok(()),
         Decision::Deny { reason } => Err(ToolError::Denied(reason)),
     }
