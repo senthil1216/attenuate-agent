@@ -428,8 +428,18 @@ struct AssistantMessage {
     content: Option<String>,
 }
 
+fn default_tool_type() -> String {
+    "function".to_string()
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawToolCall {
+    /// Always `"function"` in our tool-calling world. Some providers (OpenAI)
+    /// omit it on responses; strict providers (Z.AI/GLM) reject assistant
+    /// messages whose tool_calls omit it. Default on deserialize so we
+    /// tolerate either, always serialize it so strict providers accept replays.
+    #[serde(default = "default_tool_type")]
+    pub r#type: String,
     pub id: String,
     pub function: RawFunctionCall,
 }
@@ -873,6 +883,7 @@ mod tests {
             content: None,
             tool_calls: vec![
                 RawToolCall {
+                    r#type: "function".to_string(),
                     id: "good".to_string(),
                     function: RawFunctionCall {
                         name: "fs_read".to_string(),
@@ -880,6 +891,7 @@ mod tests {
                     },
                 },
                 RawToolCall {
+                    r#type: "function".to_string(),
                     id: "bad".to_string(),
                     function: RawFunctionCall {
                         name: "fs_read".to_string(),
@@ -923,6 +935,7 @@ mod tests {
 
     fn raw(name: &str, args: &str, id: &str) -> RawToolCall {
         RawToolCall {
+            r#type: "function".to_string(),
             id: id.to_string(),
             function: RawFunctionCall {
                 name: name.to_string(),
@@ -1105,5 +1118,33 @@ mod tests {
             arguments: r#"{"host":"127.0.0.1","port":999999,"payload":"x"}"#.to_string(),
         };
         assert!(parse_raw_tool_call(&func).is_none());
+    }
+
+    #[test]
+    fn raw_tool_call_always_serializes_type_field() {
+        // Regression: Z.AI/GLM rejects assistant messages whose tool_calls
+        // omit `type` ("Tool type cannot be empty"). We must always emit it on
+        // serialize, even though OpenAI sometimes omits it on deserialize.
+        let call = RawToolCall {
+            r#type: "function".to_string(),
+            id: "id1".to_string(),
+            function: RawFunctionCall {
+                name: "fs_read".to_string(),
+                arguments: "{}".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&call).unwrap();
+        assert!(
+            json.contains(r#""type":"function""#),
+            "serialized tool call must include type field; got: {json}"
+        );
+    }
+
+    #[test]
+    fn raw_tool_call_defaults_type_when_absent_on_deserialize() {
+        // OpenAI sometimes omits type; we tolerate that and default to function.
+        let json = r#"{"id":"id1","function":{"name":"fs_read","arguments":"{}"}}"#;
+        let call: RawToolCall = serde_json::from_str(json).expect("deserialize without type");
+        assert_eq!(call.r#type, "function");
     }
 }
