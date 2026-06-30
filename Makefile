@@ -1,15 +1,17 @@
 # Warden Demo Harness Makefile
 # Run `make help` for available targets.
 
-.PHONY: help demo-setup demo-listener demo-contrast demo-contrast-live demo-clean demo-vuln demo-protected clean-artifacts demo-asciinema demo-gifs
+.PHONY: help demo-setup demo-listener demo-contrast demo-contrast-live demo-contrast-live-zai demo-clean demo-vuln demo-protected clean-artifacts demo-asciinema demo-gifs
 
 help:
 	@echo "Warden Demo targets:"
 	@echo "  make demo-setup       - Prepare /tmp fixture + secret canary"
 	@echo "  make demo-listener    - Start the canary sink (in foreground)"
 	@echo "  make demo-contrast    - Full automated contrast (clean + injected-vuln + injected-protected)"
-	@echo "  make demo-contrast-live - Live contrast: a real model emits the calls (needs BASE_URL/MODEL)"
-	@echo "                          (experimental — validate determinism first: spikes/ds4-determinism)"
+	@echo "  make demo-contrast-live    - Live contrast: a real model emits the calls (needs BASE_URL/MODEL)"
+	@echo "                           (scripted demo-contrast is the scientific control; live adds realism)"
+	@echo "  make demo-contrast-live-zai - Live contrast against Z.AI GLM (needs API_KEY)"
+	@echo "                           (sets BASE_URL/MODEL for you; scripted control still runs first)"
 	@echo "  make demo-gifs        - Render split per-run GIFs (assets/demo-vuln.gif + demo-protected.gif; needs vhs)"
 	@echo "  make demo-clean       - Run clean (no injection) scenario"
 	@echo "  make demo-vuln        - Run injected + AUTHZ=off (vulnerable baseline)"
@@ -28,9 +30,20 @@ demo-contrast:
 	cargo run -p warden-demo -- contrast
 
 demo-contrast-live:
-	@echo "Live contrast — EXPERIMENTAL. Drives a real model (needs BASE_URL/MODEL)."
-	@echo "Validate determinism first via spikes/ds4-determinism (Spike A)."
+	@echo "Live contrast — drives a real model (needs BASE_URL/MODEL)."
+	@echo "NOTE: scripted demo-contrast is the scientific control (byte-identical off/on)."
+	@echo "This live run adds REALISM: a real model is actually prompt-injected and actually denied."
+	@echo "Determinism is NOT required — the defense never inspects the principal."
 	cargo run -p warden-demo -- contrast --live
+
+# Convenience wrapper for Z.AI (Zhipu) GLM models. Sets BASE_URL/MODEL; you only
+# supply API_KEY. Hosted GLM may not be byte-deterministic at temp=0 — that is
+# fine: the scripted demo-contrast is the control; this run demonstrates a real
+# principal being structurally contained.
+demo-contrast-live-zai:
+	@test -n "$$API_KEY" || { echo "Error: set API_KEY first, e.g. API_KEY=sk-... make demo-contrast-live-zai"; exit 1; }
+	@echo "Live contrast against Z.AI GLM-4.6 (scripted control runs first for the clean off/on diff)."
+	BASE_URL=https://api.z.ai/api/paas/v4 MODEL=glm-4.6 cargo run -p warden-demo -- contrast --live
 
 demo-clean:
 	@echo "=== CLEAN (no injection) ==="
